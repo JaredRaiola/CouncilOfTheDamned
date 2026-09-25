@@ -2,7 +2,7 @@
 name: cotd
 description: "Consult when the deliverable is a plan or a change (design, implement, fix, refactor, write tests), in any repo, and decide whether to convene a council of independent mixed-model agents. Always consult when the user asks to plan, design, implement, fix, change, add, refactor, write tests, or review a PR/branch/diff, or says 'council', 'convene', 'council of the damned'. When it convenes: candidates work blind in isolated worktrees, then blind-review, rebut, and a judge eliminates until one winner (or a flawed verdict) remains. When it skips (single-file mechanical change, one clear approach, not explicitly requested): says so in one line and lets the work proceed normally. Not for questions: explanations, diagnosis, or reading code are answered first; the council is consulted only if a change follows. Also handles 'council config' to show or change the user's default roster, judge, floor and toggles."
 user-invocable: true
-argument-hint: "[design|build|test|review|config] [--roster name|m1,m2] [--judge model] [--brief file] [--floor N] [--just-go] task"
+argument-hint: "[design|build|test|review|config|clear] [--roster name|m1,m2] [--judge model] [--brief file] [--floor N] [--just-go] task"
 ---
 
 # Council of the Damned
@@ -13,7 +13,7 @@ Always considered; convenes per §0. Roster size is the cost knob.
 
 Invoked as `/cotd <args>` (`$ARGUMENTS` holds everything after the command) or by the
 model when a plan/change request arrives. If the first word of `$ARGUMENTS` is `config`,
-skip to §2b and do nothing else.
+skip to §2b and do nothing else; if it is `clear`, skip to §2c and do nothing else.
 
 ## 0. Convene or skip
 
@@ -92,6 +92,10 @@ Operates only on the user's file from §2 step 2 (create it if missing, keys not
 
 Validate before writing: seats are `model[:effort]` with a known effort, presets referenced by `roster` exist, numbers are positive integers. On a bad value, say what is wrong and write nothing.
 
+## 2c. `/cotd clear` — delete transcripts
+
+Resolve `transcriptDir` as in §2. `/cotd clear` targets `<transcriptDir>/<repoName>/` for the current repo (`repoName` as in §4); `/cotd clear all` targets the whole `<transcriptDir>`. List the files that would go (path and count), ask once for confirmation, then delete them and remove now-empty folders. `--yes` skips the confirmation. Never delete anything outside `<transcriptDir>`, and never follow symlinks out of it. If the target does not exist, say so and stop.
+
 ## 3. Summons (brief, always drafted)
 
 The brief is ALWAYS drafted from the repo and passed to every candidate. "Just go" skips only step 3's clarifying questions (go straight from the draft to §4); it never skips drafting or sending the brief itself. Draft the **council brief** by reading the repo (read-only):
@@ -163,3 +167,5 @@ The workflow returns `{ submissions, reviews, rebuttals, verdict, transcript }`.
 - **Worktree cleanup** (build/test mode only, and only when the verdict is NOT flawed): unless `keepWorktrees`, remove every submission worktree, plus any leftover `council-wt-<this run's slug>-*` or `council-scratch-<this run's slug>-*` worktree (this run's member and reviewer worktrees that a failed step may have left behind). Before ANY removal, save every candidate's work: for each `council-wt-<slug>-<label>` run `git -C "<args.repo>" update-ref refs/council/<slug>/<label> $(git -C <worktree> rev-parse HEAD)`. Then use this exact order **per worktree** — never skip step (a): (a) if `depDir` is set, unlink the dependency junction/symlink FIRST, with BACKSLASH paths only on Windows (forward slashes inside the path make cmd read `/x` as a switch and fail) — from the Bash tool `cmd //c rmdir "<worktree>\<depDir>"`, from PowerShell `cmd /c rmdir "<worktree>\<depDir>"` (`cmd //c` in PowerShell is a silent no-op: banner, exit 0, link still there); elsewhere `rm "<worktree>/<depDir>"` (no `-r`, no `-rf` — a recursive delete on a junction follows it into the main checkout and destroys the real contents; `rmdir`/plain `rm` on a junction/symlink removes only the link); (a2) check the link is GONE — Bash `[ -e "<worktree>/<depDir>" ] && echo STILL-THERE`, PowerShell `Test-Path "<worktree>\<depDir>"` must be `False`; if it is still present, STOP — do not run (b) for this or any other worktree, and tell the user; (b) `git worktree remove --force <worktree>`; then `git worktree prune` once all worktrees are gone. Never touch `council-wt-*` worktrees from a different slug — those belong to another run, possibly one that ended `flawed` and is keeping its worktrees on purpose. After all removals, if `depDir` is set, verify `<args.repo>/<depDir>` still exists and is non-empty; if it does not, STOP immediately — do not continue delivery — and tell the user exactly what appears to have been deleted. On a `flawed` verdict, leave every worktree in place — nothing is removed, ever — and list their paths instead; if the user later deletes one of those worktrees by hand, they must `rmdir` the `depDir` link first, before `git worktree remove`.
 
 Report: winner label + model, who was killed and why, grafts applied, transcript path. Never commit; the user commits.
+
+If the effective `keepTranscripts` is `false`, delete this run's transcript file after the report is printed (and its `<repoName>` folder if now empty), and say so in one line. Keep it regardless when the verdict is `flawed` or the report is DEGRADED: those transcripts are the only record of what went wrong.

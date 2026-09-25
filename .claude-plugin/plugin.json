@@ -1,6 +1,6 @@
 {
   "name": "cotd",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Council of the Damned: fans a task out to independent mixed-model agents that blind-review, rebut, and eliminate each other's work until one winner survives.",
   "author": { "name": "Jared Raiola", "url": "https://github.com/JaredRaiola" }
 }

@@ -154,6 +154,7 @@ resolved to `{ model, effort }` before the scripts see them.
   "minWorkflows": 3,
   "rebuttalFix": true,
   "keepWorktrees": false,
+  "keepTranscripts": true,
   "transcriptDir": "~/.claude/council"
 }
 ```

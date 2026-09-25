@@ -119,6 +119,7 @@ by hand or with:
 | `/cotd config judge opus:max` | default judge |
 | `/cotd config floor 3` | default evidence floor |
 | `/cotd config autoConvene off` | stop the council from convening on its own (see below) |
+| `/cotd config keepTranscripts off` | delete each run's transcript after its report (flawed and degraded runs are kept) |
 | `/cotd config keepWorktrees on` | any other key the same way |
 | `/cotd config reset` | back to shipped defaults |
 
@@ -138,6 +139,7 @@ Shipped defaults:
   "minWorkflows": 3,
   "rebuttalFix": true,
   "keepWorktrees": false,
+  "keepTranscripts": true,
   "transcriptDir": "~/.claude/council"
 }
 ```
@@ -152,6 +154,7 @@ Shipped defaults:
 | `minWorkflows` | build/test: how many workflows members should cover (judge guidance, not a kill) |
 | `rebuttalFix` | build/test: members may fix a confirmed bug in their worktree during rebuttal |
 | `keepWorktrees` | leave member worktrees in place after a non-flawed verdict |
+| `keepTranscripts` | `false`: delete the transcript after each successful run's report |
 | `transcriptDir` | where run transcripts are written |
 
 If `fable` is not available in your session, its seats run on `opus`.
@@ -174,6 +177,10 @@ Each run appends to `<transcriptDir>/<repo-name>/<date>-<slug>.md` as it goes: t
 every member's submission, every review, every rebuttal, the verdict, and which model
 sat in which seat (members and judge never see model names). Same-day re-runs get a
 `-2`, `-3` suffix.
+
+Clear them with `/cotd clear` (this repo's transcripts) or `/cotd clear all`; both list what
+will be deleted and ask once, `--yes` skips the question. `/cotd config keepTranscripts off`
+deletes each run's transcript automatically once its report is printed.
 
 ### What you get back
 

@@ -11,5 +11,6 @@
   "minWorkflows": 3,
   "rebuttalFix": true,
   "keepWorktrees": false,
+  "keepTranscripts": true,
   "transcriptDir": "~/.claude/council"
 }
