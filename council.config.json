@@ -1,0 +1,15 @@
+{
+  "roster": [
+    { "model": "fable", "effort": "high" },
+    { "model": "fable", "effort": "high" },
+    { "model": "opus", "effort": "high" },
+    { "model": "opus", "effort": "high" },
+    { "model": "sonnet", "effort": "high" }
+  ],
+  "judge": { "model": "fable", "effort": "max" },
+  "minExamplesPerWorkflow": 5,
+  "minWorkflows": 3,
+  "rebuttalFix": true,
+  "keepWorktrees": false,
+  "transcriptDir": "~/.claude/council"
+}
