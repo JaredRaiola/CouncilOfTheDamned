@@ -13,5 +13,9 @@
   "rebuttalFix": true,
   "keepWorktrees": false,
   "keepTranscripts": true,
-  "transcriptDir": "~/.claude/council"
+  "transcriptDir": "~/.claude/council",
+  "maxTokens": 0,
+  "maxRetries": 0,
+  "rosterByMode": {},
+  "reviewModel": ""
 }

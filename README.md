@@ -46,9 +46,13 @@ Either way the command is `/cotd`. Run `/reload-skills` after installing.
 | `build` | implement, fix, change, add, refactor | real diffs in private git worktrees | running each other's tests, trying to break the diff |
 | `test` | write tests, cover, spec, prove | spec files proven RED → GREEN | running every suite against a deliberately broken copy |
 | `review` | review PR / branch / diff | independent reviews + manual test plans | cross-checking every finding against the code |
+| `audit` | audit, find every, hunt | findings across a scope you name (no PR) + test plan | cross-checking every finding against the code |
+| `decide` | decide, choose between, which option | a score for every fixed option, a ranking, and the best argument against their own pick | challenging each other's scores, then rebuttal; the judge ranks, recommends, states confidence and dissent |
 
 The mode is inferred from the task text if you leave it out. Build wins over design when
 both appear. A design winner can be handed straight to a build run ("build the winner").
+`decide` changes nothing in the repo: you get a decision record, saved under
+`<transcriptDir>/<repo>/decisions/` if you say yes.
 
 Examples:
 
@@ -59,6 +63,11 @@ Examples:
 /cotd test --floor 3 cover the date parser
 /cotd review PR 42
 /cotd build --brief docs/briefs/upload-limits.md
+/cotd build --wip finish the half-done retry logic on my working copy
+/cotd build --budget 600k --review-model sonnet add pagination to /api/orders
+/cotd build --stop-after fanout try three ways to split the monolith config
+/cotd audit find every place we trust a client-sent user id
+/cotd decide which queue should we use --options "1: Redis streams; 2: SQS; 3: Postgres LISTEN/NOTIFY"
 ```
 
 ### Flags
@@ -73,9 +82,33 @@ Examples:
 | `--keep-worktrees` | "keep worktrees" | leave member worktrees after delivery |
 | `--brief <file>` | "brief: <file>" | your file is the brief (see below) |
 | `--just-go` | "just go" | no questions, no approval step (`/cotd config justGo on` makes it the default) |
+| `--retries N` | "retry up to N times" | on a flawed verdict, re-run with the judge's reasons added to the brief, up to N times |
+| `--wip` | "on my working copy", "wip" | build/test on your uncommitted work: it is snapshotted to `refs/council-wip/<slug>` (HEAD, branch and index untouched) and the winner lands on top of your dirty tree |
+| `--budget <N>k` | "budget 600k" | phase cap in output tokens: once reached after a round, the remaining rounds are skipped (judge still runs) and the run is marked DEGRADED |
+| `--stop-after fanout` | "stop after fanout" | build/test/design: stop after the members; nothing lands, worktrees stay; use `/cotd runs` and `/cotd apply` |
+| `--review-model <model>` | "review with sonnet" | run every review, rebuttal and cross-check on that model |
+| `--options "A: ...; B: ..."` | "choose between ..." | decide: the fixed options (or a `## Options` section in your brief) |
 
 Models: whatever your session's Agent tool offers (`fable`, `opus`, `sonnet`, `haiku`).
 Effort: `low`, `medium`, `high` (default), `max`. Max 10 seats.
+
+### Pipelines: council for some stages, solo for others
+
+```
+/cotd pipeline design:default build:solo test:small add rate limiting to /api/upload
+/cotd pipeline design:small build:solo how should we cache search results, then build it
+/cotd pipeline build:solo test:cheap fix the date parser
+```
+
+Each stage is `<mode>:<roster>`: the mode is `design`, `build` or `test`; the roster is a
+preset name, an explicit seat list, or `solo`. `solo` means no council for that stage:
+Claude does it as ordinary work, no agents, no judge. Stages chain automatically. The
+design winner becomes the build brief's approach, the build winner is applied uncommitted,
+and the test stage runs on that uncommitted tree via `--wip`. The brief is approved once,
+up front, with a cost preview for the whole pipeline. A flawed or degraded stage stops the
+pipeline; what earlier stages landed stays in your tree, uncommitted. One transcript per
+council stage, plus a pipeline summary at the end. Prose works too: "design with the
+council, build solo, then test with a small council".
 
 ### Skip the questions: supply the brief yourself
 
@@ -104,15 +137,35 @@ approval. To give it everything up front, write the brief as a file and pass `--
 Sections you include are used as written. Sections you omit are drafted from the repo and
 shown to you. A complete file launches immediately.
 
+### Standing brief and lessons
+
+Sections that hold for every run in a repo (constraints, evidence, dependency dir) can live
+in a **standing brief**: `<repo>/.cotd/brief.md` (committed, shared with the team) or
+`~/.claude/council-briefs/<repo-name>.md` (private); the first one found is used. Its
+sections go into every brief verbatim; a `--brief` file beats it, and it beats anything
+drafted. It does not skip the approval step, and a `## Task` section in it is ignored with
+a warning. The transcript header names the file (`Standing brief: <path|none>`).
+`/cotd brief save` writes the current run's brief (minus its Task) to the private location,
+`/cotd brief save --shared` to `.cotd/brief.md`.
+
+The judge may also return **lessons**: repo facts a future council needs, never task
+specifics. They are appended, dated, to `<transcriptDir>/<repo-name>/lessons.md` (edit it by
+hand freely) and added to every later brief of that repo as a separate
+`## Lessons from past runs` section.
+
 ### Change the default council
 
-Defaults ship in the plugin. Your overrides live in `~/.claude/council.config.json`
-(or `$CLAUDE_CONFIG_DIR/council.config.json`) and survive plugin updates. Edit that file
-by hand or with:
+Defaults ship in the plugin. A repo can commit `<repo>/.cotd/council.config.json` (the
+project layer), limited to `roster`, `rosters`, `judge`, `rosterByMode`,
+`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix` and `reviewModel`; any other key in
+it is reported and ignored. Your overrides live in `~/.claude/council.config.json`
+(or `$CLAUDE_CONFIG_DIR/council.config.json`), beat the project layer, and survive plugin
+updates. Order: shipped → project → yours → `rosterByMode` → flags. Edit your file by hand or
+with:
 
 | Command | Effect |
 |---|---|
-| `/cotd config` | show the effective config and which keys you overrode |
+| `/cotd config` | show the effective config with each key marked `bundled`, `project`, `user` or `flag`, and the standing brief that applies |
 | `/cotd config roster small` | make an existing preset the default |
 | `/cotd config roster heavy fable:max,fable:max,opus:high` | define preset `heavy` and make it the default |
 | `/cotd config preset cheap sonnet,sonnet` | define or replace a preset, keep the current default |
@@ -121,6 +174,9 @@ by hand or with:
 | `/cotd config autoConvene off` | stop the council from convening on its own (see below) |
 | `/cotd config justGo on` | never ask questions or wait for approval of the brief |
 | `/cotd config keepTranscripts off` | delete each run's transcript after its report (flawed and degraded runs are kept) |
+| `/cotd config rosterByMode review cheap` | always use preset `cheap` for reviews (`--roster` still wins) |
+| `/cotd config maxTokens 600k` | default budget; `0` turns it off |
+| `/cotd config reviewModel sonnet` | run reviews, rebuttals and cross-checks on sonnet; `none` = each member's own seat |
 | `/cotd config keepWorktrees on` | any other key the same way |
 | `/cotd config reset` | back to shipped defaults |
 
@@ -142,7 +198,11 @@ Shipped defaults:
   "rebuttalFix": true,
   "keepWorktrees": false,
   "keepTranscripts": true,
-  "transcriptDir": "~/.claude/council"
+  "transcriptDir": "~/.claude/council",
+  "maxTokens": 0,
+  "maxRetries": 0,
+  "rosterByMode": {},
+  "reviewModel": ""
 }
 ```
 
@@ -159,6 +219,10 @@ Shipped defaults:
 | `keepWorktrees` | leave member worktrees in place after a non-flawed verdict |
 | `keepTranscripts` | `false`: delete the transcript after each successful run's report |
 | `transcriptDir` | where run transcripts are written |
+| `maxTokens` | budget per run in output tokens (`--budget`); `0` = off. A phase cap, not a hard limit: the round in flight and the judge still finish |
+| `maxRetries` | `0`: a flawed verdict stops. `N`: retry up to N times with the judge's reasons appended to the brief; degraded runs never auto-retry |
+| `rosterByMode` | mode → preset name, e.g. `{ "review": "cheap", "decide": "small" }` |
+| `reviewModel` | model for every review, rebuttal and cross-check call (`--review-model`); empty = each member's own seat |
 
 If `fable` is not available in your session, its seats run on `opus`; a fable seat that
 fails mid-run is retried on `opus` and the transcript's `Models:` line names the model that
@@ -186,32 +250,52 @@ entries, and which model sat in which seat (members and judge never see model na
 Same-day re-runs get a `-2`, `-3` suffix. Before launching, the skill prints a one-line
 cost preview: members, judge and roughly how many agent calls the run will make.
 
-Clear them with `/cotd clear` (this repo's transcripts) or `/cotd clear all`; both list what
-will be deleted and ask once, `--yes` skips the question. `/cotd config keepTranscripts off`
-deletes each run's transcript automatically once its report is printed.
+Clear them with `/cotd clear` (this repo's transcripts; `lessons.md`, `decisions/` and the
+ledger stay) or `/cotd clear all` (the whole transcript dir, lessons and decisions included,
+plus the ledger); both list what will be deleted and ask once, `--yes` skips the question.
+`/cotd config keepTranscripts off` deletes each run's transcript automatically once its
+report is printed.
+
+### Other commands
+
+| Command | Effect |
+|---|---|
+| `/cotd doctor` | read-only health check: git >= 2.5, Workflow and Agent tools, `fable` available, no CR characters in the workflow scripts, every config file parses and every preset resolves, transcript dir writable, stale council worktrees and dangling dependency links. Changes nothing |
+| `/cotd stats` | wins, rankings, eliminations, dead-on-arrival and deaths per `model:effort` and per mode, from the last 500 runs in `~/.claude/council-ledger.jsonl` (one line per run, written on every run; never shown to any agent) |
+| `/cotd retry [<slug>]` | re-run the most recent (or named) flawed run once, with its judge's reasons added to the brief; `--roster` escalates |
+| `/cotd runs [slug]` | every saved `refs/council/<slug>/<label>` with its `git diff --stat` |
+| `/cotd apply <slug> <label>` | apply one saved member's work to your tree, uncommitted. Refuses if it touches a file you have uncommitted changes in, stops if it does not apply cleanly, and says so when that member was not the council's winner |
+| `/cotd brief save [--shared]` | save the current run's brief (minus its Task) as the standing brief |
 
 ### What you get back
 
 - **build / test**: the winner's full diff applied to your main tree, uncommitted, plus
   any grafts the judge took from eliminated members, and the winner's test command run
-  once in your tree. Every member's final commit is saved under `refs/council/<slug>/<label>`
-  before worktrees are removed.
+  once in your tree. Under `--wip` only the council's change is applied, on top of your
+  uncommitted work. Every member's worktree (uncommitted work included) is saved under
+  `refs/council/<slug>/<label>` before the verdict is acted on, flawed runs too.
 - **design**: the winning approach, with an offer to build it.
+- **audit**: like review, over the scope named in the task instead of a change.
+- **decide**: the final ranking of your options, a recommendation with its confidence, the
+  rationale and the dissent worth recording, with an offer to save it as a decision record.
 - **review**: findings most-severe first (each confirmed by at least one other member and
   checked by the judge), what was dropped and why, and one merged manual test plan. A PR or
   branch is reviewed at its own head, in a detached `council-review-<slug>` worktree, never
   in your working tree.
-- **flawed**: nothing is applied, every worktree is left in place for inspection, and the
-  reasons are listed.
-- **DEGRADED**: if any member, reviewer or rebuttal agent died, the report says so first
-  and nothing lands without your confirmation.
+- **flawed** (and `--stop-after fanout`): nothing is applied, every worktree is left in
+  place for inspection, and the reasons are listed; `/cotd apply` can still deliver any one
+  member's saved work.
+- **DEGRADED**: if any member, reviewer or rebuttal agent died, or the budget ran out, the
+  report says so first and nothing lands without your confirmation.
 
 ## Cost
 
 Roster size is the cost knob. A run is about 3N+2 agent calls for N members (build,
 review, rebuttal, judge); with more than 3 members each one reviews two peers instead of
 all of them. A 5-seat build run can exceed a million tokens. `--roster small` or
-`--roster cheap` for routine work.
+`--roster cheap` for routine work, `--review-model sonnet` to make the review rounds
+cheaper, `--budget 600k` to cut the rounds short once that many output tokens are spent, and
+`/cotd stats` to see which seats actually win.
 
 ## Safety notes
 
@@ -220,7 +304,7 @@ all of them. A 5-seat build run can exceed a million tokens. `--roster small` or
   worktree while that link is present deletes the real dependency dir. Only
   `skills/cotd/scripts/council-clean.sh` creates, links, removes or applies those
   worktrees: members never run `git worktree add` or `mklink`, and `clean` saves every
-  worktree's commit under `refs/council/<slug>/<label>`, unlinks first, refuses to remove a
+  worktree (uncommitted work included) under `refs/council/<slug>/<label>`, unlinks first, refuses to remove a
   worktree whose link survived, and verifies your dependency dir afterwards. It only ever
   touches worktrees of the run's own slug. After a `flawed` verdict the worktrees stay for
   inspection; remove them with
@@ -242,6 +326,7 @@ all of them. A 5-seat build run can exceed a million tokens. `--roster small` or
 skills/cotd/SKILL.md                        orchestrator instructions
 skills/cotd/SPEC.md                         design spec, evidence floor, gotchas from live runs
 skills/cotd/council.config.json             shipped defaults
-skills/cotd/workflows/council-*.js          one Workflow script per mode
-skills/cotd/scripts/council-clean.sh        worktree create / clean / apply (and its .test.sh)
+skills/cotd/workflows/council-*.js          one Workflow script per mode (design, build, test, review/audit, decide)
+skills/cotd/scripts/council-clean.sh        worktrees, refs, wip snapshot, runs, stats, doctor (and its .test.sh)
+skills/cotd/scripts/council-workflows.test.mjs  stub-harness self-check for every workflow script
 ```

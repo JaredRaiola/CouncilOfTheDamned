@@ -5,6 +5,7 @@ export const meta = {
 }
 
 const A = args
+const t0 = budget.spent()
 const LABELS = 'ABCDEFGHIJ'
 // strips everything that must never reach another agent's prompt: seat model/effort and the fallback marker
 const noMeta = ({ model, effort, _fellBack, ...s }) => s
@@ -34,6 +35,7 @@ const VERDICT = { type: 'object', properties: {
   }, required: ['title', 'file', 'severity', 'scenario', 'confirmedBy'] } },
   dropped: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, why: { type: 'string' } }, required: ['title', 'why'] } },
   testPlan: { type: 'array', items: STEP },
+  lessons: { type: 'array', items: { type: 'string' } },
 }, required: ['findings', 'dropped', 'testPlan'] }
 
 const appendRule = (section) => `
@@ -49,7 +51,7 @@ const reviewPrompt = (i) => `First: cd "${A.repo}".
 
 ${readOnly}
 
-You are council member ${LABELS[i]}, one of several independent reviewers. Review the change described in the brief for correctness bugs, security/authorization gaps, data-integrity problems, and missed business rules. Trace each suspicion through the real code before reporting it — every finding needs a concrete failure scenario (inputs/state → wrong outcome). No style nits. Give each finding a short unique id prefixed ${LABELS[i]} (e.g. ${LABELS[i]}1).
+You are council member ${LABELS[i]}, one of several independent reviewers. Review the ${A.pr ? 'change' : 'scope'} described in the brief for correctness bugs, security/authorization gaps, data-integrity problems, and missed business rules. Trace each suspicion through the real code before reporting it — every finding needs a concrete failure scenario (inputs/state → wrong outcome). No style nits. Give each finding a short unique id prefixed ${LABELS[i]} (e.g. ${LABELS[i]}1).
 
 Also write a manual test plan a human will run: grouped by area, each item = steps + expected result, covering the happy paths, the edge cases your findings suggest, and regressions in flows the change touches indirectly.
 
@@ -87,6 +89,7 @@ Rules:
 3. Severity is yours to set: blocker = data loss, security, money, or a broken core flow; major = a real user-visible bug; minor = everything else that is still a real defect.
 4. Every drop goes in 'dropped' with a one-line why.
 5. testPlan = one merged, de-duplicated manual test plan from all plans and gaps, ordered by area, each step concrete (which user, which page, what to enter) with an expected result. Include a test for every surviving finding.
+6. Optional \`lessons\`: repo facts a future council needs, never task specifics.
 
 Reviews: ${JSON.stringify(reviews, null, 1)}
 Cross-checks: ${JSON.stringify(checks, null, 1)}
@@ -96,10 +99,17 @@ ${A.brief}
 ${appendRule(`## Verdict\n<surviving findings most-severe first, dropped + why, test plan outline>`)}`
 
 const degraded = []
+let agentCalls = 0
 // fable unavailable (no credits, not offered) → the seat is re-run on opus, not lost.
-const seat = (prompt, o) => agent(prompt, o).catch(() => null).then(r => r ?? (o.model === 'fable'
-  ? (log(`${o.label}: fable failed, retrying on opus`), agent(prompt, { ...o, model: 'opus' }).then(x => x && { ...x, _fellBack: true }).catch(() => null))
+const ask = (prompt, o) => (agentCalls++, agent(prompt, o))
+const seat = (prompt, o) => ask(prompt, o).catch(() => null).then(r => r ?? (o.model === 'fable'
+  ? (log(`${o.label}: fable failed, retrying on opus`), ask(prompt, { ...o, model: 'opus' }).then(x => x && { ...x, _fellBack: true }).catch(() => null))
   : r))
+// --budget: a phase cap in output tokens spent by this run, checked between rounds; the judge always runs
+const over = (stage) => A.maxTokens > 0 && budget.spent() - t0 >= A.maxTokens && (log(`budget: ${Math.round((budget.spent() - t0) / 1000)}k >= ${Math.round(A.maxTokens / 1000)}k after ${stage}; skipping to Verdict`), degraded.push(`budget exhausted after ${stage}`), true)
+// run ledger line, spread into every return; §5 appends it to <config dir>/council-ledger.jsonl. Never quoted into a prompt.
+// review/audit have no member winner: a member that returned is 'unranked'
+const ledger = (v) => ({ ledger: JSON.stringify({ date: A.date, repoName: A.repoName, slug: A.slug, mode: A.pr ? 'review' : 'audit', runId: `${A.repoName}/${A.date}-${A.slug}`, agentCalls, tokens: budget.spent() - t0, flawed: !!v.flawed, seats: roster.map((m, i) => { const r = reviews.find(x => x.label === LABELS[i]); return { seat: `${r ? r.model : m.model}:${m.effort}`, label: LABELS[i], fate: r ? 'unranked' : 'died' } }) }) })
 phase('Review')
 const rv = await parallel(roster.map((m, i) => () =>
   seat(reviewPrompt(i), { label: `review:${LABELS[i]}`, phase: 'Review', model: m.model, effort: m.effort, schema: REVIEW })
@@ -107,22 +117,26 @@ const rv = await parallel(roster.map((m, i) => () =>
 ))
 rv.forEach((r, i) => { if (!r) degraded.push(`member ${LABELS[i]} died during review`) })
 const reviews = rv.filter(Boolean)
-if (!reviews.length) return { reviews, checks: [], verdict: { findings: [], dropped: [], testPlan: [], degraded: [...degraded, 'every member died'] }, transcript: A.transcript }
+if (!reviews.length) {
+  const verdict = { findings: [], dropped: [], testPlan: [], lessons: [], degraded: [...degraded, 'every member died'] }
+  return { reviews, checks: [], verdict, transcript: A.transcript, ...ledger(verdict) }
+}
 
 let checks = []
-if (reviews.length > 1) {
+if (reviews.length > 1 && !over('Review')) {
   phase('Cross-check')
   const ck = await parallel(reviews.map((me, i) => () =>
-    seat(checkPrompt(me, peersOf(reviews, i)), { label: `check:${me.label}`, phase: 'Cross-check', model: me.model, effort: me.effort, schema: CHECK })
+    seat(checkPrompt(me, peersOf(reviews, i)), { label: `check:${me.label}`, phase: 'Cross-check', model: A.reviewModel || me.model, effort: me.effort, schema: CHECK })
       .then(c => c && { by: me.label, ...noMeta(c) })
   ))
   ck.forEach((c, i) => { if (!c) degraded.push(`cross-checker ${reviews[i].label} died`) })
   checks = ck.filter(Boolean)
-} else log('single reviewer: skipping cross-check')
+} else if (reviews.length === 1) log('single reviewer: skipping cross-check')
 
 phase('Verdict')
 const judged = await seat(judgePrompt(reviews.map(noMeta), checks), { label: 'judge', phase: 'Verdict', model: A.judge.model, effort: A.judge.effort, schema: VERDICT })
 const verdict = judged ? noMeta(judged) : (degraded.push('judge died'), { findings: [], dropped: [], testPlan: [] })
+verdict.lessons = (verdict.lessons || []).map(l => String(l).replace(/\s*[\r\n]+\s*/g, ' ').trim()).filter(Boolean)
 verdict.models = Object.fromEntries(reviews.map(r => [r.label, r.model]))
 if (degraded.length) verdict.degraded = degraded
-return { reviews, checks, verdict, transcript: A.transcript }
+return { reviews, checks, verdict, transcript: A.transcript, ...ledger(verdict) }

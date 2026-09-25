@@ -17,11 +17,16 @@ convene; roster size is the cost knob once it does.
 | design | Approach write-up: files touched, risks, deliberate skips, diff sketch, workflows that a build would need to prove | Rebuttal rounds only |
 | build | Real diff in its own worktree + its own test/run output meeting the evidence floor | Running the candidate's tests in its worktree and trying to break it |
 | test | Spec file(s) for the target, proven RED then GREEN where applicable | Running every suite against the target and against a deliberately broken copy; a suite that stays green on the broken copy is dead |
+| review / audit | Findings with failure scenarios + a manual test plan, for a change (review) or a scope named in the brief's Task (audit, `pr: false`) | Cross-checking every peer finding against the code |
+| decide | A scoring of every fixed option against the brief's (or its own stated) criteria, a ranking, rationale, risks, and the strongest argument against its own top pick | Blind challenges to scores, then rebuttal; the judge returns the final ranking, recommendation, confidence and dissent |
 
 Mode inference from the request: plan / design / options / how-should-we → design;
-implement / fix / change / add → build; write tests / cover / spec → test. The user
-can name the mode explicitly. A design-mode winner can be handed straight into a
-build-mode run ("build the winner").
+implement / fix / change / add → build; write tests / cover / spec → test; review a
+PR / branch / diff → review; audit / find every / hunt → audit; decide / choose between /
+which option → decide. The user can name the mode explicitly. A design-mode winner can
+be handed straight into a build-mode run ("build the winner"). Decide changes nothing in
+the repo: delivery prints the decision record and offers to save it under
+`<transcriptDir>/<repo-name>/decisions/<date>-<slug>.md`.
 
 ## Flow
 
@@ -116,7 +121,9 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
   `keepWorktrees`: one `council-clean.sh clean` call removes EVERY worktree of this slug,
   not just the eliminated ones (the winner's diff has already been applied to the main
   tree by then), including `-scratch` reviewer worktrees and `council-review-<slug>`.
-  Before any removal every worktree's HEAD is saved as `refs/council/<slug>/<label>`.
+  Every worktree was already snapshotted into `refs/council/<slug>/<label>` at the top of
+  delivery (`save-refs`, uncommitted work included), and `clean` snapshots again before any
+  removal unless the ref already holds that tree.
 - review with a PR/branch target: the orchestrator resolves the sha read-only, drafts the
   brief from `git show <sha>:<path>` / `git diff <base>..<sha>`, and members work in a
   detached `council-review-<slug>` worktree of that sha (no dependency link), never in
@@ -144,10 +151,17 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
 
 ## Config
 
-Bundled defaults live in `council.config.json` next to SKILL.md. A user's overrides live in
-`<config dir>/council.config.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`) and are edited with
-`/cotd config ...`; flags override both for one run. Seats are `model[:effort]` strings,
-resolved to `{ model, effort }` before the scripts see them.
+Resolution order: bundled `council.config.json` next to SKILL.md → the project layer
+`<git root>/.cotd/council.config.json` → the user's `<config dir>/council.config.json`
+(`$CLAUDE_CONFIG_DIR` or `~/.claude`, edited with `/cotd config ...`) → `rosterByMode[<mode>]`
+→ flags for one run (`--roster` beats `rosterByMode`). The project layer is committed and
+shared, so it is restricted to an allowlist: `roster`, `rosters`, `judge`, `rosterByMode`,
+`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix`, `reviewModel`. It can never set
+`transcriptDir`, `autoConvene`, `keepTranscripts` or `maxTokens` (where files go, whether the
+skill runs by itself, and what a run may spend stay the user's call); a disallowed key is
+reported and ignored, and an invalid file is reported and ignored whole. `/cotd config` marks
+each key `bundled`, `project`, `user` or `flag`. Seats are `model[:effort]` strings, resolved
+to `{ model, effort }` before the scripts see them.
 
 ```json
 {
@@ -165,21 +179,104 @@ resolved to `{ model, effort }` before the scripts see them.
   "rebuttalFix": true,
   "keepWorktrees": false,
   "keepTranscripts": true,
-  "transcriptDir": "~/.claude/council"
+  "transcriptDir": "~/.claude/council",
+  "maxTokens": 0,
+  "maxRetries": 0,
+  "rosterByMode": {},
+  "reviewModel": ""
 }
 ```
+
+- `maxTokens` (`--budget <N>k`): a phase cap in output tokens, 0 = off. See Budget below.
+- `rosterByMode`: mode → preset name (e.g. `{ "review": "cheap" }`), validated like `roster`.
+- `reviewModel` (`--review-model`): model for every review, rebuttal and cross-check call
+  (`A.reviewModel || me.model`); members and the judge keep their seats. Empty = off.
+
+## Round two (1.4.0)
+
+- **`--wip`.** Build/test on uncommitted work. §4 snapshots the dirty tree without touching
+  HEAD, the branch or the real index: the index is copied to a temp file, `GIT_INDEX_FILE=<tmp>
+  git add -A` + `write-tree`, `commit-tree <tree> -p HEAD -m council-wip`,
+  `update-ref refs/council-wip/<slug>` (so `git gc --prune=now` keeps it). That sha is `base`;
+  worktrees are created from it and delivery applies the winner's patch (against the snapshot,
+  so council work only) onto the dirty tree. Copying the real index, not starting empty, keeps
+  tracked-but-ignored files in the snapshot. The council-only view is
+  `git diff --stat <snapshot> refs/council/<slug>/<label>`.
+- **Standing brief.** `<git root>/.cotd/brief.md` (shared) or
+  `<config dir>/council-briefs/<repoName>.md` (private), first found wins. Section precedence
+  `--brief` > standing > drafted. It does not imply "just go"; its `## Task` is ignored with a
+  warning; the transcript header records `Standing brief: <path|none>`. `/cotd brief save
+  [--shared]` writes the current run's non-Task sections.
+- **Run ledger.** Every script return path (early flawed returns included) spreads
+  `...ledger(verdict)` into its return value: one JSON line with date, repoName, slug, mode,
+  runId, agentCalls, tokens (`budget.spent()` since the script started), flawed and per-seat
+  `{ seat: "model:effort", label, fate }` where fate is `won`, `ranked:<n>`, `doa`,
+  `eliminated`, `died`, or `unranked` (no member ranking: review, audit, decide,
+  `--stop-after`, judge died). §5 appends it to `<config dir>/council-ledger.jsonl` on every
+  run, even with `keepTranscripts` off. `/cotd stats` (`council-clean.sh stats`) tallies the
+  last 500 lines per `model:effort` and per mode. **Ledger data never reaches any prompt**:
+  no brief, member, reviewer or judge prompt ever quotes it, so past wins cannot bias a blind
+  judge. `/cotd clear` keeps the ledger; `/cotd clear all` removes it.
+- **Refs before the verdict.** At the top of §5, before the flawed/winner branch,
+  `council-clean.sh save-refs` snapshots every worktree of the slug (`add -A`, `write-tree`,
+  `commit-tree -p <base>`) into `refs/council/<slug>/<label>`, so uncommitted member work and
+  flawed runs are kept. It is the only write a flawed run makes. `clean` snapshots again (on
+  the worktree's HEAD) unless the saved ref already holds the same tree.
+- **`/cotd runs` and `/cotd apply <slug> <label>`.** `runs` lists saved refs with
+  `git diff --stat` against their base (the slug's wip snapshot when the ref descends from it,
+  so a stale snapshot of an earlier run of the same slug is ignored; else the merge-base with HEAD).
+  `apply` delivers a saved ref as an uncommitted patch via `council-clean.sh apply ... auto ref`:
+  it refuses only when the patch's paths intersect the main repo's dirty paths (changed against
+  HEAD, or against the snapshot for a wip run, whose WIP is the patch's base), stops on a
+  failed `apply --check`, and prints "not the council's winner" when the latest ledger line for
+  that repo and slug has no `won` fate for the label (no line, no note).
+- **Budget.** In every script `const t0 = budget.spent()` at the top; `over(stage)` is true
+  when `maxTokens` is set and `budget.spent() - t0 >= maxTokens`. Checked after the fan-out and
+  after Review: it logs `budget: <spent>k >= <cap>k after <stage>; skipping to Verdict`, pushes
+  `budget exhausted after <stage>` onto `degraded` and skips the remaining rounds. The judge
+  always runs. It is a phase cap on output tokens, not a hard limit: the round in flight and
+  the judge can overshoot it.
+- **`--stop-after fanout`** (build/test/design): return right after the members with
+  `flawed: true`, `reasons: ['stopped after fanout by --stop-after']`, so the flawed branch
+  keeps worktrees and lands nothing; pair with `/cotd runs` and `/cotd apply`.
+- **Lessons.** Every verdict schema has an optional `lessons: string[]` (in properties, not
+  required) and the judge prompt one line: "repo facts a future council needs, never task
+  specifics". Scripts read `verdict.lessons || []` and collapse newlines. §5 appends them,
+  dated, to `<transcriptDir>/<repo-name>/lessons.md` (hand-editable); §3 injects that file as a
+  separate `## Lessons from past runs` section, never touching user-supplied sections.
+  `/cotd clear` keeps it; `clear all` removes it.
+- **`/cotd doctor`** (read-only): `council-clean.sh doctor` checks git >= 2.5, zero CRs in
+  `workflows/*.js`, stale `council-wt-*` / `council-scratch-*` / `council-review-*` worktrees,
+  orphan council directories and dangling links; the orchestrator adds Workflow/Agent tools,
+  fable in the model list, config files parse and presets resolve, `transcriptDir` writable.
+- **Audit.** "audit", "find every", "hunt" run `council-review.js` with `pr: false`: the
+  brief's Task is the scope and the member prompt says "Review the scope described in the
+  brief" (`pr: true` → "the change").
+- **Decide** (`council-decide.js`, cloned from design): options come from `--options "A: ...; B: ..."`
+  or a `## Options` section in the brief, passed as `<id>: <text>` strings;
+  every option id is a schema enum. Members score every option against the brief's criteria
+  (or state derived ones), rank, give rationale, risks and `againstTopPick`; reviewers
+  challenge scores (`challenges`, with option and severity); rebuttal is concede/refute; the
+  judge returns `ranking`, `recommendation`, `confidence` (low/medium/high), `rationale`,
+  `dissent`. An empty recommendation is flawed.
 
 ## Files
 
 - `<skill dir>/SKILL.md` — trigger, mode inference, summons,
   how to call the workflows with `args`, how to read and deliver the verdict
 - `<skill dir>/council.config.json`
-- `<skill dir>/workflows/council-design.js`, `council-build.js`, `council-test.js`, `council-review.js` — invoked via `scriptPath`, so no per-repo `.claude/workflows` entry; the
+- `<skill dir>/workflows/council-design.js`, `council-build.js`, `council-test.js`, `council-review.js`, `council-decide.js` — invoked via `scriptPath`, so no per-repo `.claude/workflows` entry; the
   convene stages are duplicated in each (no import, one-level nesting only)
-- `<skill dir>/scripts/council-clean.sh` (`create` / `clean` / `apply`) — the only thing
-  that creates, links, removes or applies worktrees; `council-clean.test.sh` is its
-  self-check (temp repo, decoy slug, real links)
-- `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.md` — transcript per run
+- `<skill dir>/scripts/council-clean.sh` (`create` / `clean` / `apply` / `wip-snapshot` /
+  `save-refs` / `runs` / `stats` / `doctor`) — the only thing that creates, links, removes or
+  applies worktrees and writes council refs; `council-clean.test.sh` is its self-check (temp
+  repos, decoy slug, real links), `council-workflows.test.mjs` runs every workflow script
+  with a stubbed `agent`/`parallel`/`phase`/`log`/`budget`
+- `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.md` — transcript per run; `lessons.md` and
+  `decisions/` beside them
+- `<config dir>/council-ledger.jsonl` — one line per run; `<config dir>/council-briefs/<repo-name>.md`
+  and `<git root>/.cotd/brief.md` — standing briefs; `<git root>/.cotd/council.config.json` —
+  project config layer
 
 ## Submission schema
 
@@ -196,7 +293,15 @@ Design (no worktree/base — read-only, nothing committed):
 { label, summary, approach, filesTouched, diffSketch, risks, skipped, workflowsToProve }
 ```
 
-Review, rebuttal, and verdict schemas mirror the round descriptions above.
+Decide (read-only; `option` values are the option ids):
+```
+{ label, summary, criteria: [{name, source: brief|derived, why}],
+  scores: [{option, criterion, score 1-5, why}], ranking: [option], rationale, risks, againstTopPick }
+```
+Decide verdict: `{ flawed, reasons, ranking, recommendation, confidence, rationale, dissent, lessons? }`.
+
+Review, rebuttal, and verdict schemas mirror the round descriptions above. Every verdict
+schema carries the optional `lessons: string[]`; every return value carries `ledger`.
 
 ## Gotchas
 
@@ -269,6 +374,17 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
   says which evidence types count, otherwise candidates stay on unit-level proof and
   say so.
 - Transcript is a local file, never an artifact.
+- **Ledger stays out of prompts.** The ledger line is built from `roster` and
+  the verdict after every agent call is made and only returned; no prompt builder reads it,
+  and SKILL.md never pastes ledger or stats output into a brief. The workflow self-check
+  asserts no prompt contains `agentCalls`, `council-ledger` or `"fate"`.
+- **WIP diff direction.** `git diff refs/council-wip/<slug>` compares the
+  snapshot to the working tree and reports WIP-untracked files as deletions; the council-only
+  view is always `git diff --stat <snapshot> refs/council/<slug>/<label>`.
+- **Ledger key order.** `stats` and the "not the council's winner" check read
+  the ledger with awk/grep. `stats` reads each seat object in any key order; the winner check
+  relies on `JSON.stringify`'s `"repoName":..,"slug":..,` and `"label":..,"fate":..` order.
+  §5 must append the `ledger` string verbatim, never re-serialized.
 
 ## Out of scope
 

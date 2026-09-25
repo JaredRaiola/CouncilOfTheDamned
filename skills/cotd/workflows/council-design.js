@@ -5,6 +5,7 @@ export const meta = {
 }
 
 const A = args
+const t0 = budget.spent()
 const LABELS = 'ABCDEFGHIJ'
 // strips everything that must never reach another agent's prompt: seat model/effort and the fallback marker
 const noMeta = ({ model, effort, _fellBack, ...s }) => s
@@ -31,6 +32,7 @@ const verdictSchema = (labels) => ({ type: 'object', properties: {
   eliminated: { type: 'array', items: { type: 'object', properties: { label: { type: 'string', enum: labels }, reason: { type: 'string' } }, required: ['label', 'reason'] } },
   ranking: { type: 'array', items: { type: 'string', enum: labels } }, winner: { type: 'string', enum: [...labels, ''] },
   grafts: { type: 'array', items: { type: 'object', properties: { from: { type: 'string', enum: labels }, what: { type: 'string' }, how: { type: 'string' } }, required: ['from', 'what', 'how'] } },
+  lessons: { type: 'array', items: { type: 'string' } },
 }, required: ['flawed', 'reasons', 'eliminated', 'ranking', 'grafts', 'winner'] })
 
 // ponytail: single heredoc append per agent; interleaving between parallel agents is a known ceiling,
@@ -96,6 +98,7 @@ Rules, in order:
 3. Rank survivors on correctness of reasoning, then fit with the repo's existing patterns, then simplicity.
 4. Name a winner and list grafts: specific ideas from eliminated or lower-ranked submissions that the winner lacks, with 'how' = one sentence.
 5. If no survivor is acceptable, return flawed=true with reasons and an empty winner.
+6. Optional \`lessons\`: repo facts a future council needs, never task specifics.
 
 Use ONLY the single-letter label in every label/winner/from field and in your transcript section.
 
@@ -109,10 +112,17 @@ ${A.brief}
 ${appendRule(`## Verdict\n<eliminated + why, ranking, winner, grafts, or FLAWED + reasons>`)}`
 
 const degraded = []
+let agentCalls = 0
 // fable unavailable (no credits, not offered) → the seat is re-run on opus, not lost.
-const seat = (prompt, o) => agent(prompt, o).catch(() => null).then(r => r ?? (o.model === 'fable'
-  ? (log(`${o.label}: fable failed, retrying on opus`), agent(prompt, { ...o, model: 'opus' }).then(x => x && { ...x, _fellBack: true }).catch(() => null))
+const ask = (prompt, o) => (agentCalls++, agent(prompt, o))
+const seat = (prompt, o) => ask(prompt, o).catch(() => null).then(r => r ?? (o.model === 'fable'
+  ? (log(`${o.label}: fable failed, retrying on opus`), ask(prompt, { ...o, model: 'opus' }).then(x => x && { ...x, _fellBack: true }).catch(() => null))
   : r))
+// --budget: a phase cap in output tokens spent by this run, checked between rounds; the judge always runs
+const over = (stage) => A.maxTokens > 0 && budget.spent() - t0 >= A.maxTokens && (log(`budget: ${Math.round((budget.spent() - t0) / 1000)}k >= ${Math.round(A.maxTokens / 1000)}k after ${stage}; skipping to Verdict`), degraded.push(`budget exhausted after ${stage}`), true)
+// run ledger line, spread into every return; §5 appends it to <config dir>/council-ledger.jsonl. Never quoted into a prompt.
+const fate = (v, L) => !built.some(s => s.label === L) ? 'died' : v.winner === L && !v.flawed ? 'won' : v.eliminated.some(e => e.label === L) ? 'eliminated' : v.ranking.includes(L) ? `ranked:${v.ranking.indexOf(L) + 1}` : 'unranked'
+const ledger = (v) => ({ ledger: JSON.stringify({ date: A.date, repoName: A.repoName, slug: A.slug, mode: 'design', runId: `${A.repoName}/${A.date}-${A.slug}`, agentCalls, tokens: budget.spent() - t0, flawed: !!v.flawed, seats: roster.map((m, i) => ({ seat: `${built.find(s => s.label === LABELS[i])?.model || m.model}:${m.effort}`, label: LABELS[i], fate: fate(v, LABELS[i]) })) }) })
 phase('Design')
 const results = await parallel(roster.map((m, i) => () =>
   seat(buildPrompt(i), { label: `design:${LABELS[i]}`, phase: 'Design', model: m.model, effort: m.effort, schema: SUBMISSION })
@@ -121,35 +131,40 @@ const results = await parallel(roster.map((m, i) => () =>
 results.forEach((r, i) => { if (!r) degraded.push(`member ${LABELS[i]} died during design`) })
 const built = results.filter(Boolean)
 if (built.length < roster.length) log(`${roster.length - built.length} member(s) died during design`)
+const models = () => Object.fromEntries(built.map(s => [s.label, s.model]))
 
-if (!built.length) {
-  const reasons = ['every member died']
+if (!built.length || A.stopAfter === 'fanout') {
+  const reasons = built.length ? ['stopped after fanout by --stop-after'] : ['every member died']
   phase('Verdict')
-  return { submissions: built, reviews: [], rebuttals: [], verdict: { flawed: true, reasons, eliminated: [], ranking: [], winner: '', grafts: [], models: {}, ...(degraded.length && { degraded }) }, transcript: A.transcript }
+  const verdict = { flawed: true, reasons, eliminated: [], ranking: [], winner: '', grafts: [], lessons: [], models: models(), ...(degraded.length && { degraded }) }
+  return { submissions: built, reviews: [], rebuttals: [], verdict, transcript: A.transcript, ...ledger(verdict) }
 }
 
 const alive = built
 
 let reviews = [], rebuttals = []
-if (alive.length > 1) {
+const skipped = alive.length > 1 && over('Design')
+if (alive.length > 1 && !skipped) {
   phase('Review')
   const rv = await parallel(alive.map((me, i) => () => {
     const others = peersOf(alive, i)
-    return seat(reviewPrompt(me, others), { label: `review:${me.label}`, phase: 'Review', model: me.model, effort: me.effort, schema: reviewSchema(others.map(o => o.label)) })
+    return seat(reviewPrompt(me, others), { label: `review:${me.label}`, phase: 'Review', model: A.reviewModel || me.model, effort: me.effort, schema: reviewSchema(others.map(o => o.label)) })
       .then(r => r && { by: me.label, ...noMeta(r) })
   }))
   rv.forEach((r, i) => { if (!r) degraded.push(`reviewer ${alive[i].label} died`) })
   reviews = rv.filter(Boolean)
 
-  phase('Rebuttal')
-  rebuttals = await parallel(alive.map(me => () => {
-    const ofMe = reviews.flatMap(r => r.reviews.filter(x => x.of === me.label).map(x => ({ by: r.by, ...x })))
-    if (!ofMe.some(x => x.bugs.length || x.workflowChallenges?.length)) return Promise.resolve({ label: me.label, responses: [] })
-    return seat(rebuttalPrompt(me, ofMe), { label: `rebut:${me.label}`, phase: 'Rebuttal', model: me.model, effort: me.effort, schema: REBUTTAL })
-      .then(r => r ? { label: me.label, ...noMeta(r) } : { label: me.label, responses: [], died: true })
-  }))
-  rebuttals.forEach(r => { if (r.died) degraded.push(`rebuttal ${r.label} died`) })
-} else {
+  if (!over('Review')) {
+    phase('Rebuttal')
+    rebuttals = await parallel(alive.map(me => () => {
+      const ofMe = reviews.flatMap(r => r.reviews.filter(x => x.of === me.label).map(x => ({ by: r.by, ...x })))
+      if (!ofMe.some(x => x.bugs.length || x.workflowChallenges?.length)) return Promise.resolve({ label: me.label, responses: [] })
+      return seat(rebuttalPrompt(me, ofMe), { label: `rebut:${me.label}`, phase: 'Rebuttal', model: A.reviewModel || me.model, effort: me.effort, schema: REBUTTAL })
+        .then(r => r ? { label: me.label, ...noMeta(r) } : { label: me.label, responses: [], died: true })
+    }))
+    rebuttals.forEach(r => { if (r.died) degraded.push(`rebuttal ${r.label} died`) })
+  }
+} else if (!skipped) {
   log('single survivor: skipping review and rebuttal')
 }
 const unreviewed = alive.filter(s => !reviews.some(r => r.reviews.some(x => x.of === s.label))).map(s => s.label)
@@ -162,6 +177,7 @@ if (!verdict.flawed && !verdict.winner) verdict = { ...verdict, flawed: true, re
 const eliminatedSeen = new Set()
 verdict.eliminated = verdict.eliminated.filter(e => (eliminatedSeen.has(e.label) ? false : (eliminatedSeen.add(e.label), true)))
 if (!verdict.flawed && verdict.eliminated.some(e => e.label === verdict.winner)) verdict = { ...verdict, flawed: true, reasons: [...verdict.reasons, 'judge named an eliminated member as winner'] }
-verdict.models = Object.fromEntries(built.map(s => [s.label, s.model]))
+verdict.lessons = (verdict.lessons || []).map(l => String(l).replace(/\s*[\r\n]+\s*/g, ' ').trim()).filter(Boolean)
+verdict.models = models()
 if (degraded.length) verdict.degraded = degraded
-return { submissions: built, reviews, rebuttals, verdict, transcript: A.transcript }
+return { submissions: built, reviews, rebuttals, verdict, transcript: A.transcript, ...ledger(verdict) }

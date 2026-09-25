@@ -1,4 +1,4 @@
-// Self-check for the workflow scripts: runs each council-*.js with fake agent/parallel/phase/log/pipeline and asserts on prompts.
+// Self-check for the workflow scripts: runs each council-*.js with fake agent/parallel/phase/log/pipeline/budget and asserts on prompts and return values. Run: node council-workflows.test.mjs
 import fs from 'node:fs'
 import assert from 'node:assert/strict'
 
@@ -16,16 +16,17 @@ const rvw = (L) => ({ findings: [{ id: `${L}1`, title: 't', file: 'f', severity:
 
 async function run(name, args, plan = {}) {
   const calls = []; const logs = []; const phases = []
+  let spent = plan.startSpent ?? 0; const budget = { total: 0, spent: () => spent, remaining: () => Infinity }
   const agent = async (prompt, o) => {
-    calls.push({ prompt, o })
+    calls.push({ prompt, o }); spent += plan.tokensPerCall ?? 0
     const r = plan.reply ? plan.reply(prompt, o, calls) : undefined
     if (r === 'THROW') throw new Error('fable unavailable')
     return r
   }
   const parallel = (fns) => Promise.all(fns.map(f => f()))
   const src = fs.readFileSync(W(name), 'utf8').replace(/^export /m, '')
-  const fn = new (async () => {}).constructor('args', 'agent', 'parallel', 'phase', 'log', 'pipeline', src)
-  const out = await fn(args, agent, parallel, (p) => phases.push(p), (l) => logs.push(l), () => { throw new Error('pipeline unused') })
+  const fn = new (async () => {}).constructor('args', 'agent', 'parallel', 'phase', 'log', 'pipeline', 'budget', src)
+  const out = await fn(args, agent, parallel, (p) => phases.push(p), (l) => logs.push(l), () => { throw new Error('pipeline unused') }, budget)
   return { out, calls, logs, phases }
 }
 const byLabel = (calls, prefix) => calls.filter(c => c.o.label.startsWith(prefix))
@@ -194,5 +195,172 @@ const replyReview = (opts = {}) => (prompt, o, calls) => {
   const { out, calls } = await run('review', { ...base, roster: roster(1) }, { reply: replyReview() })
   assert.equal(byLabel(calls, 'check:').length, 0); assert.equal(out.verdict.degraded, undefined)
   ok(`review N=1: cross-check skipped, ${calls.length} calls`)
+}
+
+// ===== round two: budget gate, --stop-after, lessons, reviewModel, ledger, audit scope, decide =====
+const ledgerOf = (out) => JSON.parse(out.ledger)
+const noLedgerInPrompts = (calls) => assert.ok(!calls.some(c => /agentCalls|council-ledger|"fate"/.test(c.prompt)), 'ledger data reached a prompt')
+const verdictSchemaOf = (calls) => calls.find(c => c.o.label === 'judge').o.schema
+const replyDecide = (opts = {}) => (prompt, o, calls) => {
+  if (opts.dieLabels?.includes(o.label)) return null
+  if (o.label.startsWith('decide:')) return { summary: 's', criteria: [{ name: 'cost', source: 'derived', why: 'w' }], scores: [{ option: 'P', criterion: 'cost', score: 4, why: 'y' }], ranking: ['P', 'Q'], rationale: 'r', risks: [], againstTopPick: 'x' }
+  if (o.label.startsWith('review:')) return { reviews: enumOf(calls.at(-1)).map(of => ({ of, challenges: opts.noChallenges ? [] : [{ desc: 'score too high', option: 'P', severity: 'major' }], weaknesses: [], betterThanMine: 'x' })) }
+  if (o.label.startsWith('rebut:')) return { responses: [{ challenge: 'score too high', action: 'refute', evidence: 'f:1' }] }
+  if (o.label === 'judge') return opts.judgeDies ? null : { flawed: false, reasons: [], ranking: ['Q', 'P'], recommendation: opts.noRec ? '' : 'Q', confidence: 'medium', rationale: 'r', dissent: ['P is cheaper'], ...(opts.lessons && { lessons: opts.lessons }) }
+  throw new Error(`unexpected agent label ${o.label}`)
+}
+const OPTS = ['P: postgres for everything', 'Q: sqlite per tenant']
+const phaseOf = { build: 'Build', test: 'Write', design: 'Design' }
+
+for (const kind of ['build', 'test', 'design']) {
+  const memberPrefix = { build: 'build:', test: 'write:', design: 'design:' }[kind]
+  // 9. budget over after fan-out: review+rebuttal skipped, degraded, judge still runs; spend before the run is not counted
+  {
+    const { out, calls, logs } = await run(kind, { ...base, roster: roster(3), maxTokens: 250000 }, { reply: replyFor(kind), tokensPerCall: 100000, startSpent: 5000000 })
+    assert.equal(byLabel(calls, 'review:').length, 0); assert.equal(byLabel(calls, 'rebut:').length, 0); assert.equal(byLabel(calls, 'judge').length, 1)
+    assert.ok(out.verdict.degraded.includes(`budget exhausted after ${phaseOf[kind]}`))
+    const line = logs.find(l => l.startsWith('budget:')); assert.equal(line, `budget: 300k >= 250k after ${phaseOf[kind]}; skipping to Verdict`)
+    ok(`${kind} budget 250k, 100k/call, 5M spent before start: "${line}", ${calls.length} calls (3 members + judge), degraded=${JSON.stringify(out.verdict.degraded)}`)
+  }
+  // 10. budget over only after Review: rebuttal skipped; cap 0 = off
+  {
+    const { out, calls, logs } = await run(kind, { ...base, roster: roster(3), maxTokens: 500000 }, { reply: replyFor(kind), tokensPerCall: 100000 })
+    assert.equal(byLabel(calls, 'review:').length, 3); assert.equal(byLabel(calls, 'rebut:').length, 0); assert.equal(byLabel(calls, 'judge').length, 1)
+    assert.ok(out.verdict.degraded.includes('budget exhausted after Review') && !out.verdict.degraded.includes(`budget exhausted after ${phaseOf[kind]}`))
+    const off = await run(kind, { ...base, roster: roster(3), maxTokens: 0 }, { reply: replyFor(kind), tokensPerCall: 10000000 })
+    assert.equal(byLabel(off.calls, 'rebut:').length, 3); assert.ok(!off.logs.some(l => l.startsWith('budget:'))); assert.equal(off.out.verdict.degraded, undefined)
+    ok(`${kind} budget 500k: ${logs.find(l => l.startsWith('budget:'))}, rebuttals=0; maxTokens 0 at 10M/call: rebuttals=3, no budget log`)
+  }
+  // 11. --stop-after fanout: flawed with the reason, nothing after the members, ledger present
+  {
+    const { out, calls } = await run(kind, { ...base, roster: roster(3), stopAfter: 'fanout' }, { reply: replyFor(kind) })
+    assert.equal(out.verdict.flawed, true); assert.deepEqual(out.verdict.reasons, ['stopped after fanout by --stop-after']); assert.equal(out.verdict.winner, '')
+    assert.equal(calls.length, 3); assert.ok(calls.every(c => c.o.label.startsWith(memberPrefix)))
+    const L = ledgerOf(out); assert.deepEqual(L.seats.map(s => s.fate), ['unranked', 'unranked', 'unranked']); assert.equal(L.flawed, true); assert.equal(L.agentCalls, 3)
+    ok(`${kind} --stop-after fanout: flawed ${JSON.stringify(out.verdict.reasons)}, ${calls.length} calls, ledger fates ${L.seats.map(s => s.fate).join(',')}`)
+  }
+  // 12. lessons: optional in schema; absent -> []; present -> newlines collapsed, blanks dropped
+  {
+    const a = await run(kind, { ...base, roster: roster(2) }, { reply: replyFor(kind) })
+    const sch = verdictSchemaOf(a.calls); assert.ok(sch.properties.lessons && !sch.required.includes('lessons'))
+    assert.deepEqual(a.out.verdict.lessons, [])
+    assert.ok(a.calls.find(c => c.o.label === 'judge').prompt.includes('repo facts a future council needs, never task specifics'))
+    const withL = (p, o, c) => o.label === 'judge' ? { ...replyFor(kind)(p, o, c), lessons: ['tests need\n  `pnpm build` first', '   ', 'no CR in workflows'] } : replyFor(kind)(p, o, c)
+    const b = await run(kind, { ...base, roster: roster(2) }, { reply: withL })
+    assert.deepEqual(b.out.verdict.lessons, ['tests need `pnpm build` first', 'no CR in workflows'])
+    ok(`${kind} lessons: optional in schema, absent -> [], present -> ${JSON.stringify(b.out.verdict.lessons)}, judge prompt has the lessons line`)
+  }
+  // 13. reviewModel: review + rebuttal use it; members and judge keep their seats
+  {
+    const { calls } = await run(kind, { ...base, roster: roster(3, 'opus'), reviewModel: 'haiku' }, { reply: replyFor(kind) })
+    assert.ok(byLabel(calls, 'review:').every(c => c.o.model === 'haiku') && byLabel(calls, 'rebut:').every(c => c.o.model === 'haiku'))
+    assert.ok(byLabel(calls, memberPrefix).every(c => c.o.model === 'opus') && byLabel(calls, 'judge')[0].o.model === 'fable')
+    assert.ok(byLabel(calls, 'review:').every(c => c.o.effort === 'high')); assert.ok(!calls.some(c => c.prompt.includes('haiku')), 'reviewModel reached a prompt')
+    const none = await run(kind, { ...base, roster: roster(2, 'opus') }, { reply: replyFor(kind) })
+    assert.ok(byLabel(none.calls, 'review:').every(c => c.o.model === 'opus'))
+    ok(`${kind} reviewModel haiku: review=${byLabel(calls, 'review:').map(c => c.o.model).join(',')} rebut=${byLabel(calls, 'rebut:').map(c => c.o.model).join(',')} members=opus judge=fable; unset -> reviews on opus`)
+  }
+  // 14. ledger on the final return: fates won / ranked:n / eliminated / doa / died, counts, tokens delta, never in prompts
+  {
+    const judge = { flawed: false, reasons: [], eliminated: [{ label: 'C', reason: 'bug' }], ranking: ['B', 'A'], winner: 'B', grafts: [] }
+    const reply = (p, o, c) => o.label === 'judge' ? judge : replyFor(kind, { dieLabels: [memberPrefix + 'E'], examples: { D: 1 } })(p, o, c)
+    const r = await run(kind, { ...base, roster: [...roster(4), { model: 'fable', effort: 'max' }] }, { reply, tokensPerCall: 1000, startSpent: 777 })
+    const L = ledgerOf(r.out)
+    const want = kind === 'design' ? ['ranked:2', 'won', 'eliminated', 'unranked', 'died'] : ['ranked:2', 'won', 'eliminated', 'doa', 'died']
+    assert.deepEqual(L.seats.map(s => s.fate), want); assert.deepEqual(L.seats.map(s => s.seat), ['sonnet:high', 'sonnet:high', 'sonnet:high', 'sonnet:high', 'fable:max'])
+    assert.equal(L.agentCalls, r.calls.length); assert.equal(L.tokens, r.calls.length * 1000); assert.equal(L.mode, kind === 'test' ? 'test' : kind)
+    assert.equal(L.runId, 'repo/2026-09-25-my-slug'); assert.ok(r.out.ledger.includes('"repoName":"repo","slug":"my-slug",'))
+    assert.ok(/"seat":"[^"]*","label":"[^"]*","fate":"[^"]*"/.test(r.out.ledger)); noLedgerInPrompts(r.calls)
+    ok(`${kind} ledger: fates ${want.join(',')} (E died, fable seat), agentCalls=${L.agentCalls} (incl. opus retry), tokens=${L.tokens} (delta), mode=${L.mode}`)
+  }
+  // 15. ledger on the early "every member died" return
+  {
+    const { out } = await run(kind, { ...base, roster: roster(2) }, { reply: replyFor(kind, { dieLabels: [memberPrefix + 'A', memberPrefix + 'B'] }) })
+    const L = ledgerOf(out); assert.deepEqual(L.seats.map(s => s.fate), ['died', 'died']); assert.equal(L.agentCalls, 2); assert.equal(L.flawed, true)
+    ok(`${kind} early return (all died) carries ledger: ${out.ledger}`)
+  }
+}
+
+// review: budget, reviewModel on cross-check, audit scope, ledger, lessons
+{
+  const { out, calls, logs } = await run('review', { ...base, roster: roster(3), maxTokens: 100000 }, { reply: replyReview(), tokensPerCall: 50000 })
+  assert.equal(byLabel(calls, 'check:').length, 0); assert.equal(byLabel(calls, 'judge').length, 1)
+  assert.deepEqual(out.verdict.degraded, ['budget exhausted after Review']); assert.ok(!logs.includes('single reviewer: skipping cross-check'))
+  ok(`review budget 100k at 50k/call: ${logs.find(l => l.startsWith('budget:'))}, cross-check skipped, judge ran, degraded=${JSON.stringify(out.verdict.degraded)}`)
+}
+{
+  const { out, calls } = await run('review', { ...base, roster: roster(3, 'opus'), reviewModel: 'sonnet', pr: true }, { reply: (p, o, c) => o.label === 'judge' ? { findings: [], dropped: [], testPlan: [], lessons: ['ci runs\nnode 20'] } : replyReview()(p, o, c) })
+  assert.ok(byLabel(calls, 'check:').every(c => c.o.model === 'sonnet') && byLabel(calls, 'review:').every(c => c.o.model === 'opus'))
+  assert.ok(byLabel(calls, 'review:')[0].prompt.includes('Review the change described in the brief'))
+  assert.deepEqual(out.verdict.lessons, ['ci runs node 20']); const sch = verdictSchemaOf(calls); assert.ok(sch.properties.lessons && !sch.required.includes('lessons'))
+  const L = ledgerOf(out); assert.equal(L.mode, 'review'); assert.deepEqual(L.seats.map(s => s.fate), ['unranked', 'unranked', 'unranked']); noLedgerInPrompts(calls)
+  ok(`review pr=true: "Review the change", check model=sonnet (reviewModel), review model=opus, lessons=${JSON.stringify(out.verdict.lessons)}, ledger fates unranked x3`)
+}
+{
+  const { out, calls } = await run('review', { ...base, roster: roster(2) }, { reply: replyReview() })
+  assert.ok(byLabel(calls, 'review:').every(c => c.prompt.includes('Review the scope described in the brief')))
+  assert.deepEqual(out.verdict.lessons, [])
+  const died = await run('review', { ...base, roster: roster(2) }, { reply: (p, o) => null })
+  const L = ledgerOf(died.out); assert.deepEqual(L.seats.map(s => s.fate), ['died', 'died'])
+  assert.equal(ledgerOf(died.out).mode, 'audit')
+  ok(`review audit (no pr): "Review the scope", ledger mode=audit; all-died early return ledger fates ${L.seats.map(s => s.fate).join(',')}`)
+}
+
+// decide mode end to end
+{
+  const { out, calls } = await run('decide', { ...base, roster: roster(3), options: OPTS }, { reply: replyDecide({ lessons: ['db\nis postgres 15'] }) })
+  const m = byLabel(calls, 'decide:A')[0]
+  assert.deepEqual(m.o.schema.properties.scores.items.properties.option.enum, ['P', 'Q']); assert.ok(m.o.schema.required.includes('againstTopPick'))
+  assert.ok(m.prompt.includes('- P: postgres for everything') && m.prompt.includes('single strongest argument against your own top pick') && m.prompt.includes('## Brief\n' + BRIEF))
+  const j = byLabel(calls, 'judge')[0]; assert.deepEqual(j.o.schema.properties.recommendation.enum, ['P', 'Q', '']); assert.deepEqual(j.o.schema.properties.confidence.enum, ['low', 'medium', 'high'])
+  assert.ok(!j.o.schema.required.includes('lessons') && !/sonnet|fable|opus/.test(j.prompt))
+  assert.equal(byLabel(calls, 'review:').length, 3); assert.equal(byLabel(calls, 'rebut:').length, 3)
+  assert.equal(out.verdict.recommendation, 'Q'); assert.equal(out.verdict.flawed, false); assert.deepEqual(out.verdict.dissent, ['P is cheaper']); assert.deepEqual(out.verdict.lessons, ['db is postgres 15'])
+  for (const c of calls) assert.ok(c.prompt.includes('## Brief\n' + BRIEF) && c.prompt.includes('only authorizes this run'))
+  noLedgerInPrompts(calls); assert.equal(ledgerOf(out).mode, 'decide')
+  ok(`decide N=3: option enums [P,Q], againstTopPick required, 3 reviews + 3 rebuttals, recommendation=${out.verdict.recommendation} confidence=${out.verdict.confidence}, lessons collapsed, judge blind`)
+}
+{
+  const { out, calls } = await run('decide', { ...base, roster: roster(2), options: OPTS }, { reply: replyDecide({ noChallenges: true, noRec: true }) })
+  assert.equal(byLabel(calls, 'rebut:').length, 0); assert.equal(out.verdict.flawed, true); assert.ok(out.verdict.reasons.includes('judge returned no recommendation'))
+  ok(`decide no challenges -> no rebuttal calls; empty recommendation -> flawed ${JSON.stringify(out.verdict.reasons)}`)
+}
+{
+  const { out, calls, logs } = await run('decide', { ...base, roster: roster(3), options: OPTS, maxTokens: 200000, reviewModel: 'haiku' }, { reply: replyDecide(), tokensPerCall: 100000 })
+  assert.equal(byLabel(calls, 'review:').length, 0); assert.deepEqual(out.verdict.degraded.slice(0, 1), ['budget exhausted after Decide']); assert.equal(byLabel(calls, 'judge').length, 1)
+  const rm = await run('decide', { ...base, roster: roster(2), options: OPTS, reviewModel: 'haiku' }, { reply: replyDecide() })
+  assert.ok(byLabel(rm.calls, 'review:').every(c => c.o.model === 'haiku') && byLabel(rm.calls, 'rebut:').every(c => c.o.model === 'haiku') && byLabel(rm.calls, 'decide:').every(c => c.o.model === 'sonnet'))
+  ok(`decide budget: ${logs.find(l => l.startsWith('budget:'))}; reviewModel haiku on review+rebuttal only`)
+}
+{
+  const died = await run('decide', { ...base, roster: roster(2), options: OPTS }, { reply: replyDecide({ dieLabels: ['decide:A', 'decide:B'] }) })
+  assert.equal(died.out.verdict.flawed, true); assert.deepEqual(died.out.verdict.reasons, ['every member died']); assert.deepEqual(ledgerOf(died.out).seats.map(s => s.fate), ['died', 'died'])
+  const jd = await run('decide', { ...base, roster: roster(1), options: OPTS }, { reply: replyDecide({ judgeDies: true }) })
+  assert.equal(jd.out.verdict.flawed, true); assert.deepEqual(jd.out.verdict.degraded, ['unreviewed: A', 'judge died']); assert.ok(jd.logs.includes('single member: skipping review and rebuttal'))
+  ok(`decide all died -> flawed + ledger died,died; N=1 judge died -> degraded=${JSON.stringify(jd.out.verdict.degraded)}`)
+}
+{
+  // bad option lists: flawed before any agent call, ledger line still returned (no seats)
+  for (const options of [undefined, ['A: only one'], ['A: keep', 'A: split'], ['A: keep', ': nameless']]) {
+    const { out, calls } = await run('decide', { ...base, roster: roster(3), options }, { reply: replyDecide() })
+    assert.equal(calls.length, 0); assert.equal(out.verdict.flawed, true); assert.ok(out.verdict.reasons[0].startsWith('decide needs at least two options with distinct ids'))
+    assert.deepEqual(ledgerOf(out).seats, []); assert.equal(ledgerOf(out).agentCalls, 0)
+  }
+  ok('decide options undefined / one option / duplicate ids / empty id -> flawed, 0 agent calls, ledger line with no seats')
+}
+// boundary: spent == cap is over (>=); one token of headroom is not (all five scripts)
+{
+  const replies = { build: replyFor('build'), test: replyFor('test'), design: replyFor('design'), review: replyReview(), decide: replyDecide() }
+  const fanout = { build: 'Build', test: 'Write', design: 'Design', review: 'Review', decide: 'Decide' }
+  const seen = []
+  for (const [f, reply] of Object.entries(replies)) {
+    const at = await run(f, { ...base, options: OPTS, roster: roster(3), maxTokens: 300000 }, { reply, tokensPerCall: 100000 })
+    const below = await run(f, { ...base, options: OPTS, roster: roster(3), maxTokens: 300001 }, { reply, tokensPerCall: 100000 })
+    assert.ok(at.out.verdict.degraded?.includes(`budget exhausted after ${fanout[f]}`), `${f} at cap`)
+    assert.ok(!below.out.verdict.degraded?.includes(`budget exhausted after ${fanout[f]}`), `${f} below cap`)
+    assert.ok(at.calls.length < below.calls.length, `${f}: cap must skip rounds`)
+    seen.push(`${f}: at cap ${at.calls.length} calls, below ${below.calls.length}`)
+  }
+  ok(`budget boundary (spent == cap is over): ${seen.join('; ')}`)
 }
 console.log(`${n} checks passed`)
