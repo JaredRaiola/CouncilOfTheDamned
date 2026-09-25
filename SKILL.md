@@ -1,7 +1,7 @@
 ---
 name: council-of-the-damned
 description: "Consult when the deliverable is a plan or a change (design, implement, fix, refactor, write tests), in any repo, and decide whether to convene a council of independent mixed-model agents. Always consult when the user asks to plan, design, implement, fix, change, add, refactor, write tests, or review a PR/branch/diff, or says 'council', 'convene', 'council of the damned'. When it convenes: candidates work blind in isolated worktrees, then blind-review, rebut, and a judge eliminates until one winner (or a flawed verdict) remains. When it skips (single-file mechanical change, one clear approach, not explicitly requested): says so in one line and lets the work proceed normally. Not for questions: explanations, diagnosis, or reading code are answered first; the council is consulted only if a change follows."
-user-invokable: true
+user-invocable: true
 ---
 
 # Council of the Damned
