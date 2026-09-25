@@ -1,0 +1,13 @@
+{
+  "name": "council-of-the-damned",
+  "description": "Council of the Damned plugin marketplace",
+  "owner": { "name": "Jared Raiola", "url": "https://github.com/JaredRaiola" },
+  "plugins": [
+    {
+      "name": "council",
+      "description": "Adversarial multi-agent skill for Claude Code: isolated agents build, blind-review, rebut, and a judge kills the weak. One winner or a flawed verdict.",
+      "version": "1.0.0",
+      "source": "./"
+    }
+  ]
+}

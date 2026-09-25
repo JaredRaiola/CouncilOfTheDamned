@@ -1,0 +1,15 @@
+{
+  "roster": "default",
+  "rosters": {
+    "default": ["fable:high", "fable:high", "opus:high", "opus:high", "sonnet:high"],
+    "small":   ["fable:high", "opus:high", "sonnet:high"],
+    "cheap":   ["sonnet:high", "sonnet:high", "sonnet:high"]
+  },
+  "judge": "fable:max",
+  "autoConvene": true,
+  "minExamplesPerWorkflow": 5,
+  "minWorkflows": 3,
+  "rebuttalFix": true,
+  "keepWorktrees": false,
+  "transcriptDir": "~/.claude/council"
+}

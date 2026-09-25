@@ -10,7 +10,7 @@ without seeing each other, then makes them review, rebut, and eliminate each oth
 work until one survivor (or a "flawed" verdict) remains. Goal: catch the bugs a
 single agent misses, and surface the best approach instead of the first approach.
 
-Invoked whenever the user plans or changes code, in any repo. Lives at user level (`~/.claude/skills`), nothing project-specific in it; repo gotchas go in the brief, not the skill. Always considered — it is consulted on every such request and decides, per §0 of SKILL.md, whether to
+Invoked whenever the user plans or changes code, in any repo. Lives at user level (a plugin or `~/.claude/skills/council`), nothing project-specific in it; repo gotchas go in the brief, not the skill. Always considered — it is consulted on every such request and decides, per §0 of SKILL.md, whether to
 convene; roster size is the cost knob once it does.
 
 ## Modes
@@ -135,18 +135,21 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
 
 ## Config
 
-`~/.claude/skills/council-of-the-damned/council.config.json`:
+Bundled defaults live in `council.config.json` next to SKILL.md. A user's overrides live in
+`<config dir>/council.config.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`) and are edited with
+`/council config ...`; flags override both for one run. Seats are `model[:effort]` strings,
+resolved to `{ model, effort }` before the scripts see them.
 
 ```json
 {
-  "roster": [
-    { "model": "fable", "effort": "high" },
-    { "model": "fable", "effort": "high" },
-    { "model": "opus",  "effort": "high" },
-    { "model": "opus",  "effort": "high" },
-    { "model": "sonnet","effort": "high" }
-  ],
-  "judge": { "model": "fable", "effort": "max" },
+  "roster": "default",
+  "rosters": {
+    "default": ["fable:high", "fable:high", "opus:high", "opus:high", "sonnet:high"],
+    "small":   ["fable:high", "opus:high", "sonnet:high"],
+    "cheap":   ["sonnet:high", "sonnet:high", "sonnet:high"]
+  },
+  "judge": "fable:max",
+  "autoConvene": true,
   "minExamplesPerWorkflow": 5,
   "minWorkflows": 3,
   "rebuttalFix": true,
@@ -155,14 +158,12 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
 }
 ```
 
-Inline overrides win for one run.
-
 ## Files
 
-- `~/.claude/skills/council-of-the-damned/SKILL.md` — trigger, mode inference, summons,
+- `<skill dir>/SKILL.md` — trigger, mode inference, summons,
   how to call the workflows with `args`, how to read and deliver the verdict
-- `~/.claude/skills/council-of-the-damned/council.config.json`
-- `~/.claude/skills/council-of-the-damned/workflows/council-design.js`, `council-build.js`, `council-test.js` — invoked via `scriptPath`, so no per-repo `.claude/workflows` entry; the
+- `<skill dir>/council.config.json`
+- `<skill dir>/workflows/council-design.js`, `council-build.js`, `council-test.js`, `council-review.js` — invoked via `scriptPath`, so no per-repo `.claude/workflows` entry; the
   convene stages are duplicated in each (no import, one-level nesting only)
 - `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.md` — transcript per run
 

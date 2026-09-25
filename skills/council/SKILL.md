@@ -1,7 +1,8 @@
 ---
-name: council-of-the-damned
-description: "Consult when the deliverable is a plan or a change (design, implement, fix, refactor, write tests), in any repo, and decide whether to convene a council of independent mixed-model agents. Always consult when the user asks to plan, design, implement, fix, change, add, refactor, write tests, or review a PR/branch/diff, or says 'council', 'convene', 'council of the damned'. When it convenes: candidates work blind in isolated worktrees, then blind-review, rebut, and a judge eliminates until one winner (or a flawed verdict) remains. When it skips (single-file mechanical change, one clear approach, not explicitly requested): says so in one line and lets the work proceed normally. Not for questions: explanations, diagnosis, or reading code are answered first; the council is consulted only if a change follows."
+name: council
+description: "Consult when the deliverable is a plan or a change (design, implement, fix, refactor, write tests), in any repo, and decide whether to convene a council of independent mixed-model agents. Always consult when the user asks to plan, design, implement, fix, change, add, refactor, write tests, or review a PR/branch/diff, or says 'council', 'convene', 'council of the damned'. When it convenes: candidates work blind in isolated worktrees, then blind-review, rebut, and a judge eliminates until one winner (or a flawed verdict) remains. When it skips (single-file mechanical change, one clear approach, not explicitly requested): says so in one line and lets the work proceed normally. Not for questions: explanations, diagnosis, or reading code are answered first; the council is consulted only if a change follows. Also handles 'council config' to show or change the user's default roster, judge, floor and toggles."
 user-invocable: true
+argument-hint: "[design|build|test|review|config] [--roster name|m1,m2] [--judge model] [--brief file] [--floor N] [--just-go] task"
 ---
 
 # Council of the Damned
@@ -10,9 +11,15 @@ One task → N independent agents (mixed models, no cross-visibility) → blind 
 rebuttal → judge kills the weak → one winner applied uncommitted, or `flawed` and stop.
 Always considered; convenes per §0. Roster size is the cost knob.
 
+Invoked as `/council <args>` (`$ARGUMENTS` holds everything after the command) or by the
+model when a plan/change request arrives. If the first word of `$ARGUMENTS` is `config`,
+skip to §2b and do nothing else.
+
 ## 0. Convene or skip
 
 Always convene (review mode) for a code review: "review PR N", "review this branch/diff". A review is not skipped as "no code change".
+
+`autoConvene: false` in the effective config (§2) turns off automatic convening: skip with `council skipped: autoConvene off` unless the user typed `/council`, or said "council" or "convene". Everything below still applies once one of those forces it.
 
 Not a trigger: a question. Explanations, diagnosis, "is this a bug", "what does this do", and reading code are answered directly with no council decision. Consult this skill only when the deliverable is a plan or a change, which is usually the message after the answer.
 
@@ -37,14 +44,53 @@ council skipped: <reason>
 | write tests, cover, spec, prove | test | `workflows/council-test.js` |
 | review (a PR, branch, or diff), test plan for a PR | review | `workflows/council-review.js` |
 
-Explicit "council <mode>" wins. Build wins over design when both appear ("plan and implement").
+Explicit mode as the first word of `$ARGUMENTS` or "council <mode>" in prose wins. Build wins over design when both appear ("plan and implement").
+
+### Flags
+
+Flags may appear anywhere in `$ARGUMENTS` or in prose; a flag wins over the prose form. Everything that is not a mode word or a flag is the task text.
+
+| Flag | Prose form | Effect (this run only) |
+|---|---|---|
+| `--roster <preset>` | "small council", "cheap council" | roster = that preset from `rosters` |
+| `--roster m1,m2,...` | "council with 3 opus and 1 sonnet" | roster = exactly those seats; each seat is `model` or `model:effort`, effort defaults to `high` |
+| `--judge model[:effort]` | "judge opus" | judge seat |
+| `--floor N` | "floor 3" | `minExamplesPerWorkflow` = N |
+| `--no-rebuttal-fix` | "no rebuttal fix" | `rebuttalFix` = false |
+| `--keep-worktrees` | "keep worktrees" | `keepWorktrees` = true |
+| `--brief <file>` | "brief: <file>" | use that file as the brief (§3) |
+| `--just-go` | "just go" | skip the brief's questions and approval (§3) |
+
+Model names are whatever the Agent tool's model list offers this session (`fable`, `opus`, `sonnet`, `haiku`). Effort is `low`, `medium`, `high` or `max`. A roster longer than 10 seats is truncated by the scripts.
 
 ## 2. Resolve config
 
-Read `council.config.json` next to this file. If `fable` is not in the Agent tool's model list this session, replace every `fable` in roster and judge with `opus` (same effort) before convening. Same if a fable agent fails mid-run on credits/availability: resume the run (`resumeFromRunId`) with those seats as opus — finished agents replay from cache. `council-review.js` also retries a failed fable seat on opus by itself. Inline overrides for one run:
-- "small council" → first 3 roster entries
-- "council with 3 opus and 1 sonnet" → roster exactly as stated, effort high
-- "floor 3" → minExamplesPerWorkflow 3; "no rebuttal fix" → rebuttalFix false; "keep worktrees" → keepWorktrees true
+Effective config = bundled defaults, then the user's file, then flags (§1):
+
+1. `council.config.json` next to this SKILL.md: the bundled defaults. Never edit it in place; a plugin update replaces it.
+2. `<config dir>/council.config.json`, where `<config dir>` is `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Optional; any key present overrides the same key from step 1 (`rosters` merges per preset name).
+3. Flags and prose overrides from §1.
+
+Then resolve seats: `roster` is a preset name looked up in `rosters` (or an explicit list from `--roster`); each seat string `model[:effort]` becomes `{ "model", "effort" }` for the scripts, and `judge` the same way. `~` in `transcriptDir` means `<config dir>`'s parent home directory.
+
+If `fable` is not in the Agent tool's model list this session, replace every `fable` seat (roster and judge) with `opus` at the same effort before convening. Same if a fable agent fails mid-run on credits/availability: resume the run (`resumeFromRunId`) with those seats as opus — finished agents replay from cache. `council-review.js` also retries a failed fable seat on opus by itself.
+
+## 2b. `/council config` — show or change the defaults
+
+Operates only on the user's file from §2 step 2 (create it if missing, keys not mentioned stay as they were). After every change print the file's full contents and its path. Forms:
+
+| Command | Effect |
+|---|---|
+| `/council config` | print the effective config (steps 1+2 merged), marking which keys come from the user's file, and the file's path |
+| `/council config roster <preset>` | default roster = that preset (must exist in `rosters`) |
+| `/council config roster <preset> m1,m2,...` | define or replace preset `<preset>` with those seats, and make it the default |
+| `/council config preset <name> m1,m2,...` | define or replace a preset without changing the default |
+| `/council config judge model[:effort]` | default judge |
+| `/council config floor N` | `minExamplesPerWorkflow` |
+| `/council config <key> <value>` | any other key: `autoConvene`, `minWorkflows`, `rebuttalFix`, `keepWorktrees`, `transcriptDir` (`on`/`off`/`true`/`false` for booleans) |
+| `/council config reset` | delete the user's file; bundled defaults apply again |
+
+Validate before writing: seats are `model[:effort]` with a known effort, presets referenced by `roster` exist, numbers are positive integers. On a bad value, say what is wrong and write nothing.
 
 ## 3. Summons (brief, always drafted)
 
@@ -66,6 +112,8 @@ The brief is ALWAYS drafted from the repo and passed to every candidate. "Just g
 ## Done criteria
 <bullets>
 ```
+
+**User-supplied brief (`--brief <file>`).** Read the file; it uses the same headings. Sections it contains are taken verbatim and never rewritten. Only sections it omits are drafted from the repo as above. A user-supplied brief implies "just go" unless a section had to be drafted, in which case show only the drafted sections and ask about those. The file itself is never modified.
 
 Unless the user said "just go": show it, ask at most 3 targeted questions only where the request is ambiguous, and let the user edit or approve it. If the user said "just go", skip the questions and approval step and use the drafted brief as-is. Either way, the resulting brief is passed verbatim to every candidate.
 
@@ -93,7 +141,7 @@ Workflow({ scriptPath: "<skill root>/workflows/council-<mode>.js",
           minExamplesPerWorkflow, minWorkflows, rebuttalFix, keepWorktrees, transcript, date, slug } })
 ```
 
-`depDir` and `evidenceNotes` are taken verbatim from the brief's "Dependency dir to link into worktrees" and "Evidence that counts" sections (`depDir` is `none` → pass empty/falsy). `briefWorkflowCount` goes to the judge, which treats unjustified exclusions of brief-listed workflows as a major flaw; dead on arrival is total proven examples < `minExamplesPerWorkflow` only.
+`roster` is the resolved array of `{ model, effort }` objects and `judge` one such object (§2), never preset names or `model:effort` strings. `depDir` and `evidenceNotes` are taken verbatim from the brief's "Dependency dir to link into worktrees" and "Evidence that counts" sections (`depDir` is `none` → pass empty/falsy). `briefWorkflowCount` goes to the judge, which treats unjustified exclusions of brief-listed workflows as a major flaw; dead on arrival is total proven examples < `minExamplesPerWorkflow` only.
 
 Tell the user the transcript path so they can watch it fill. Wait for the task notification; do not poll.
 
