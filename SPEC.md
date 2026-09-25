@@ -217,7 +217,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
   `gh pr create`. Scribes now get a fixed prompt: one `cat >>` heredoc, no git, no
   branches/push/PRs/tests, return DONE. `isolationRule` and the judge prompt allow only
   read-only git in the main repo (plus the member's one `worktree add`); never
-  checkout/switch/branch/push/pull/reset/stash/commit/merge/rebase or `gh`/`az` PR
+  checkout/switch/branch/push/pull/reset/stash/commit/merge/rebase or `gh`, `az`, `glab` or any other hosting-CLI PR
   commands. SKILL.md §4 records the branch + porcelain, and §5 checks them, restores the
   branch and reports any `origin/*council*` remote branch before delivering.
 - **Absolute paths.** `args.repo` is the `C:\...` form of `--show-toplevel`; member git and
