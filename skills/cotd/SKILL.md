@@ -1,5 +1,5 @@
 ---
-name: council
+name: cotd
 description: "Consult when the deliverable is a plan or a change (design, implement, fix, refactor, write tests), in any repo, and decide whether to convene a council of independent mixed-model agents. Always consult when the user asks to plan, design, implement, fix, change, add, refactor, write tests, or review a PR/branch/diff, or says 'council', 'convene', 'council of the damned'. When it convenes: candidates work blind in isolated worktrees, then blind-review, rebut, and a judge eliminates until one winner (or a flawed verdict) remains. When it skips (single-file mechanical change, one clear approach, not explicitly requested): says so in one line and lets the work proceed normally. Not for questions: explanations, diagnosis, or reading code are answered first; the council is consulted only if a change follows. Also handles 'council config' to show or change the user's default roster, judge, floor and toggles."
 user-invocable: true
 argument-hint: "[design|build|test|review|config] [--roster name|m1,m2] [--judge model] [--brief file] [--floor N] [--just-go] task"
@@ -11,7 +11,7 @@ One task → N independent agents (mixed models, no cross-visibility) → blind 
 rebuttal → judge kills the weak → one winner applied uncommitted, or `flawed` and stop.
 Always considered; convenes per §0. Roster size is the cost knob.
 
-Invoked as `/council <args>` (`$ARGUMENTS` holds everything after the command) or by the
+Invoked as `/cotd <args>` (`$ARGUMENTS` holds everything after the command) or by the
 model when a plan/change request arrives. If the first word of `$ARGUMENTS` is `config`,
 skip to §2b and do nothing else.
 
@@ -19,7 +19,7 @@ skip to §2b and do nothing else.
 
 Always convene (review mode) for a code review: "review PR N", "review this branch/diff". A review is not skipped as "no code change".
 
-`autoConvene: false` in the effective config (§2) turns off automatic convening: skip with `council skipped: autoConvene off` unless the user typed `/council`, or said "council" or "convene". Everything below still applies once one of those forces it.
+`autoConvene: false` in the effective config (§2) turns off automatic convening: skip with `council skipped: autoConvene off` unless the user typed `/cotd`, or said "council" or "convene". Everything below still applies once one of those forces it.
 
 Not a trigger: a question. Explanations, diagnosis, "is this a bug", "what does this do", and reading code are answered directly with no council decision. Consult this skill only when the deliverable is a plan or a change, which is usually the message after the answer.
 
@@ -75,20 +75,20 @@ Then resolve seats: `roster` is a preset name looked up in `rosters` (or an expl
 
 If `fable` is not in the Agent tool's model list this session, replace every `fable` seat (roster and judge) with `opus` at the same effort before convening. Same if a fable agent fails mid-run on credits/availability: resume the run (`resumeFromRunId`) with those seats as opus — finished agents replay from cache. `council-review.js` also retries a failed fable seat on opus by itself.
 
-## 2b. `/council config` — show or change the defaults
+## 2b. `/cotd config` — show or change the defaults
 
 Operates only on the user's file from §2 step 2 (create it if missing, keys not mentioned stay as they were). After every change print the file's full contents and its path. Forms:
 
 | Command | Effect |
 |---|---|
-| `/council config` | print the effective config (steps 1+2 merged), marking which keys come from the user's file, and the file's path |
-| `/council config roster <preset>` | default roster = that preset (must exist in `rosters`) |
-| `/council config roster <preset> m1,m2,...` | define or replace preset `<preset>` with those seats, and make it the default |
-| `/council config preset <name> m1,m2,...` | define or replace a preset without changing the default |
-| `/council config judge model[:effort]` | default judge |
-| `/council config floor N` | `minExamplesPerWorkflow` |
-| `/council config <key> <value>` | any other key: `autoConvene`, `minWorkflows`, `rebuttalFix`, `keepWorktrees`, `transcriptDir` (`on`/`off`/`true`/`false` for booleans) |
-| `/council config reset` | delete the user's file; bundled defaults apply again |
+| `/cotd config` | print the effective config (steps 1+2 merged), marking which keys come from the user's file, and the file's path |
+| `/cotd config roster <preset>` | default roster = that preset (must exist in `rosters`) |
+| `/cotd config roster <preset> m1,m2,...` | define or replace preset `<preset>` with those seats, and make it the default |
+| `/cotd config preset <name> m1,m2,...` | define or replace a preset without changing the default |
+| `/cotd config judge model[:effort]` | default judge |
+| `/cotd config floor N` | `minExamplesPerWorkflow` |
+| `/cotd config <key> <value>` | any other key: `autoConvene`, `minWorkflows`, `rebuttalFix`, `keepWorktrees`, `transcriptDir` (`on`/`off`/`true`/`false` for booleans) |
+| `/cotd config reset` | delete the user's file; bundled defaults apply again |
 
 Validate before writing: seats are `model[:effort]` with a known effort, presets referenced by `roster` exist, numbers are positive integers. On a bad value, say what is wrong and write nothing.
 

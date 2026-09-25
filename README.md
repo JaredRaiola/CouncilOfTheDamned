@@ -20,24 +20,24 @@ Marketplace (recommended, gets updates):
 
 ```
 claude plugin marketplace add JaredRaiola/CouncilOfTheDamned
-claude plugin install council@council-of-the-damned
+claude plugin install cotd@council-of-the-damned
 ```
 
 Manual:
 
 ```
 git clone https://github.com/JaredRaiola/CouncilOfTheDamned
-cp -r CouncilOfTheDamned/skills/council ~/.claude/skills/council
+cp -r CouncilOfTheDamned/skills/cotd ~/.claude/skills/cotd
 ```
 
-Either way the command is `/council`. Run `/reload-skills` after installing.
+Either way the command is `/cotd`. Run `/reload-skills` after installing.
 
 ## Everything you can do
 
 ### Run a council
 
 ```
-/council [mode] [flags] <task>
+/cotd [mode] [flags] <task>
 ```
 
 | Mode | Trigger words | Members produce | Peers verify by |
@@ -53,12 +53,12 @@ both appear. A design winner can be handed straight to a build run ("build the w
 Examples:
 
 ```
-/council fix the login redirect loop
-/council design --roster small how should we cache the search results
-/council build --roster fable,fable,opus --judge opus --just-go add rate limiting to /api/upload
-/council test --floor 3 cover the date parser
-/council review PR 42
-/council build --brief docs/briefs/upload-limits.md
+/cotd fix the login redirect loop
+/cotd design --roster small how should we cache the search results
+/cotd build --roster fable,fable,opus --judge opus --just-go add rate limiting to /api/upload
+/cotd test --floor 3 cover the date parser
+/cotd review PR 42
+/cotd build --brief docs/briefs/upload-limits.md
 ```
 
 ### Flags
@@ -112,15 +112,15 @@ by hand or with:
 
 | Command | Effect |
 |---|---|
-| `/council config` | show the effective config and which keys you overrode |
-| `/council config roster small` | make an existing preset the default |
-| `/council config roster heavy fable:max,fable:max,opus:high` | define preset `heavy` and make it the default |
-| `/council config preset cheap sonnet,sonnet` | define or replace a preset, keep the current default |
-| `/council config judge opus:max` | default judge |
-| `/council config floor 3` | default evidence floor |
-| `/council config autoConvene off` | stop the council from convening on its own (see below) |
-| `/council config keepWorktrees on` | any other key the same way |
-| `/council config reset` | back to shipped defaults |
+| `/cotd config` | show the effective config and which keys you overrode |
+| `/cotd config roster small` | make an existing preset the default |
+| `/cotd config roster heavy fable:max,fable:max,opus:high` | define preset `heavy` and make it the default |
+| `/cotd config preset cheap sonnet,sonnet` | define or replace a preset, keep the current default |
+| `/cotd config judge opus:max` | default judge |
+| `/cotd config floor 3` | default evidence floor |
+| `/cotd config autoConvene off` | stop the council from convening on its own (see below) |
+| `/cotd config keepWorktrees on` | any other key the same way |
+| `/cotd config reset` | back to shipped defaults |
 
 Shipped defaults:
 
@@ -147,7 +147,7 @@ Shipped defaults:
 | `roster` | name of the default preset in `rosters` |
 | `rosters` | named seat lists; each seat is `model` or `model:effort` |
 | `judge` | the judge seat |
-| `autoConvene` | `true`: the skill decides on every plan/change request whether to convene. `false`: only `/council`, "council" or "convene" convene it |
+| `autoConvene` | `true`: the skill decides on every plan/change request whether to convene. `false`: only `/cotd`, "council" or "convene" convene it |
 | `minExamplesPerWorkflow` | build/test: fewer proven examples in total than this is dead on arrival |
 | `minWorkflows` | build/test: how many workflows members should cover (judge guidance, not a kill) |
 | `rebuttalFix` | build/test: members may fix a confirmed bug in their worktree during rebuttal |
@@ -164,7 +164,7 @@ or workflow, changes business logic, data shape, auth, money or a server contrac
 more than one reasonable approach. Otherwise it prints `council skipped: <reason>` and
 the work proceeds normally. Reviews always convene. Questions never do.
 
-Saying "council" or "convene" always forces a run. `/council config autoConvene off` makes
+Saying "council" or "convene" always forces a run. `/cotd config autoConvene off` makes
 that the only way. To hide the skill from the model entirely, add
 `disable-model-invocation: true` to the SKILL.md frontmatter (a manual-install edit).
 
@@ -208,8 +208,8 @@ exceed a million tokens. `--roster small` or `--roster cheap` for routine work.
 
 ```
 .claude-plugin/plugin.json, marketplace.json   plugin + self-hosted marketplace
-skills/council/SKILL.md                        orchestrator instructions
-skills/council/SPEC.md                         design spec, evidence floor, gotchas from live runs
-skills/council/council.config.json             shipped defaults
-skills/council/workflows/council-*.js          one Workflow script per mode
+skills/cotd/SKILL.md                        orchestrator instructions
+skills/cotd/SPEC.md                         design spec, evidence floor, gotchas from live runs
+skills/cotd/council.config.json             shipped defaults
+skills/cotd/workflows/council-*.js          one Workflow script per mode
 ```

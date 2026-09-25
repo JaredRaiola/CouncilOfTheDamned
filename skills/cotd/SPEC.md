@@ -10,7 +10,7 @@ without seeing each other, then makes them review, rebut, and eliminate each oth
 work until one survivor (or a "flawed" verdict) remains. Goal: catch the bugs a
 single agent misses, and surface the best approach instead of the first approach.
 
-Invoked whenever the user plans or changes code, in any repo. Lives at user level (a plugin or `~/.claude/skills/council`), nothing project-specific in it; repo gotchas go in the brief, not the skill. Always considered — it is consulted on every such request and decides, per §0 of SKILL.md, whether to
+Invoked whenever the user plans or changes code, in any repo. Lives at user level (a plugin or `~/.claude/skills/cotd`), nothing project-specific in it; repo gotchas go in the brief, not the skill. Always considered — it is consulted on every such request and decides, per §0 of SKILL.md, whether to
 convene; roster size is the cost knob once it does.
 
 ## Modes
@@ -137,7 +137,7 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
 
 Bundled defaults live in `council.config.json` next to SKILL.md. A user's overrides live in
 `<config dir>/council.config.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`) and are edited with
-`/council config ...`; flags override both for one run. Seats are `model[:effort]` strings,
+`/cotd config ...`; flags override both for one run. Seats are `model[:effort]` strings,
 resolved to `{ model, effort }` before the scripts see them.
 
 ```json
