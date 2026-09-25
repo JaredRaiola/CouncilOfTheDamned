@@ -6,7 +6,7 @@
     {
       "name": "cotd",
       "description": "Adversarial multi-agent skill for Claude Code: isolated agents build, blind-review, rebut, and a judge kills the weak. One winner or a flawed verdict.",
-      "version": "1.2.1",
+      "version": "1.3.0",
       "source": "./"
     }
   ]

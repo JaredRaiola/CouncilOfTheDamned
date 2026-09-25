@@ -72,7 +72,7 @@ Examples:
 | `--no-rebuttal-fix` | "no rebuttal fix" | members may concede or refute, not fix |
 | `--keep-worktrees` | "keep worktrees" | leave member worktrees after delivery |
 | `--brief <file>` | "brief: <file>" | your file is the brief (see below) |
-| `--just-go` | "just go" | no questions, no approval step |
+| `--just-go` | "just go" | no questions, no approval step (`/cotd config justGo on` makes it the default) |
 
 Models: whatever your session's Agent tool offers (`fable`, `opus`, `sonnet`, `haiku`).
 Effort: `low`, `medium`, `high` (default), `max`. Max 10 seats.
@@ -119,6 +119,7 @@ by hand or with:
 | `/cotd config judge opus:max` | default judge |
 | `/cotd config floor 3` | default evidence floor |
 | `/cotd config autoConvene off` | stop the council from convening on its own (see below) |
+| `/cotd config justGo on` | never ask questions or wait for approval of the brief |
 | `/cotd config keepTranscripts off` | delete each run's transcript after its report (flawed and degraded runs are kept) |
 | `/cotd config keepWorktrees on` | any other key the same way |
 | `/cotd config reset` | back to shipped defaults |
@@ -135,6 +136,7 @@ Shipped defaults:
   },
   "judge": "fable:max",
   "autoConvene": true,
+  "justGo": false,
   "minExamplesPerWorkflow": 5,
   "minWorkflows": 3,
   "rebuttalFix": true,
@@ -150,6 +152,7 @@ Shipped defaults:
 | `rosters` | named seat lists; each seat is `model` or `model:effort` |
 | `judge` | the judge seat |
 | `autoConvene` | `true`: the skill decides on every plan/change request whether to convene. `false`: only `/cotd`, "council" or "convene" convene it |
+| `justGo` | `true`: every run behaves as if `--just-go` was given — the brief is drafted and sent without questions or approval |
 | `minExamplesPerWorkflow` | build/test: fewer proven examples in total than this is dead on arrival |
 | `minWorkflows` | build/test: how many workflows members should cover (judge guidance, not a kill) |
 | `rebuttalFix` | build/test: members may fix a confirmed bug in their worktree during rebuttal |
@@ -157,7 +160,9 @@ Shipped defaults:
 | `keepTranscripts` | `false`: delete the transcript after each successful run's report |
 | `transcriptDir` | where run transcripts are written |
 
-If `fable` is not available in your session, its seats run on `opus`.
+If `fable` is not available in your session, its seats run on `opus`; a fable seat that
+fails mid-run is retried on `opus` and the transcript's `Models:` line names the model that
+actually answered.
 
 ### Control when it convenes
 
@@ -167,16 +172,19 @@ or workflow, changes business logic, data shape, auth, money or a server contrac
 more than one reasonable approach. Otherwise it prints `council skipped: <reason>` and
 the work proceeds normally. Reviews always convene. Questions never do.
 
-Saying "council" or "convene" always forces a run. `/cotd config autoConvene off` makes
-that the only way. To hide the skill from the model entirely, add
+Saying "council" or "convene" always forces a run; saying "no council" or "skip council" in
+a request skips it for that request. `/cotd config autoConvene off` makes
+forcing the only way. To hide the skill from the model entirely, add
 `disable-model-invocation: true` to the SKILL.md frontmatter (a manual-install edit).
 
 ### Watch a run
 
 Each run appends to `<transcriptDir>/<repo-name>/<date>-<slug>.md` as it goes: the brief,
-every member's submission, every review, every rebuttal, the verdict, and which model
-sat in which seat (members and judge never see model names). Same-day re-runs get a
-`-2`, `-3` suffix.
+every member's submission, every review, every rebuttal, the verdict, and a final
+`## Result` block with the winner (or the flawed reasons), eliminations, any DEGRADED
+entries, and which model sat in which seat (members and judge never see model names).
+Same-day re-runs get a `-2`, `-3` suffix. Before launching, the skill prints a one-line
+cost preview: members, judge and roughly how many agent calls the run will make.
 
 Clear them with `/cotd clear` (this repo's transcripts) or `/cotd clear all`; both list what
 will be deleted and ask once, `--yes` skips the question. `/cotd config keepTranscripts off`
@@ -190,7 +198,9 @@ deletes each run's transcript automatically once its report is printed.
   before worktrees are removed.
 - **design**: the winning approach, with an offer to build it.
 - **review**: findings most-severe first (each confirmed by at least one other member and
-  checked by the judge), what was dropped and why, and one merged manual test plan.
+  checked by the judge), what was dropped and why, and one merged manual test plan. A PR or
+  branch is reviewed at its own head, in a detached `council-review-<slug>` worktree, never
+  in your working tree.
 - **flawed**: nothing is applied, every worktree is left in place for inspection, and the
   reasons are listed.
 - **DEGRADED**: if any member, reviewer or rebuttal agent died, the report says so first
@@ -198,17 +208,31 @@ deletes each run's transcript automatically once its report is printed.
 
 ## Cost
 
-Roster size is the cost knob. A 5-seat build run is roughly 15 to 20 agent calls and can
-exceed a million tokens. `--roster small` or `--roster cheap` for routine work.
+Roster size is the cost knob. A run is about 3N+2 agent calls for N members (build,
+review, rebuttal, judge); with more than 3 members each one reviews two peers instead of
+all of them. A 5-seat build run can exceed a million tokens. `--roster small` or
+`--roster cheap` for routine work.
 
 ## Safety notes
 
-- Build/test members work in `council-wt-<slug>-<label>` worktrees beside the repo and
-  link the main checkout's dependency dir (`node_modules`, `.venv`) into them. Removing a
-  worktree while that link is present deletes the real dependency dir. The skill unlinks
-  first and verifies; if you clean up by hand, do the same.
+- Build/test members work in `council-wt-<slug>-<label>` worktrees beside the repo with
+  the main checkout's dependency dir (`node_modules`, `.venv`) linked into them. Removing a
+  worktree while that link is present deletes the real dependency dir. Only
+  `skills/cotd/scripts/council-clean.sh` creates, links, removes or applies those
+  worktrees: members never run `git worktree add` or `mklink`, and `clean` saves every
+  worktree's commit under `refs/council/<slug>/<label>`, unlinks first, refuses to remove a
+  worktree whose link survived, and verifies your dependency dir afterwards. It only ever
+  touches worktrees of the run's own slug. After a `flawed` verdict the worktrees stay for
+  inspection; remove them with
+  `bash <plugin>/skills/cotd/scripts/council-clean.sh clean <repo> <slug> <depDir|none>`,
+  never by hand.
 - Members and the judge may only run read-only git in the main repo. The skill records
-  branch and status before a run and checks them after.
+  branch and status before a run and checks them after. No helper agents write to the
+  transcript; the skill writes the `## Result` block itself.
+- The Workflow harness relays your latest message to every member as "the user request".
+  If you send "continue" or an unrelated message right after launching, members are told
+  that message only authorizes the run and the brief defines the task; the skill warns you
+  in one line when the message it is about to relay is not the council request.
 - Nothing is committed and no PR is opened. You commit.
 
 ## Files
@@ -219,4 +243,5 @@ skills/cotd/SKILL.md                        orchestrator instructions
 skills/cotd/SPEC.md                         design spec, evidence floor, gotchas from live runs
 skills/cotd/council.config.json             shipped defaults
 skills/cotd/workflows/council-*.js          one Workflow script per mode
+skills/cotd/scripts/council-clean.sh        worktree create / clean / apply (and its .test.sh)
 ```
