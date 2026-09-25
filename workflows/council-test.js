@@ -49,7 +49,7 @@ ${section}
 TRANSCRIPT
 Keep it under 80 lines. Do not edit any other part of that file.`
 
-const mainRepoRule = `In the main repository at ${A.repo} you may only run read-only git commands (show, diff, log, ls-tree, rev-parse, worktree list) plus the single \`git -C "${A.repo}" worktree add ...\` you are told to run. NEVER run git checkout, switch, branch, push, pull, reset, stash, commit, merge, rebase, or \`gh\`/\`az\` PR commands against the main repository. Delivery and pull requests are the orchestrator's job.`
+const mainRepoRule = `In the main repository at ${A.repo} you may only run read-only git commands (show, diff, log, ls-tree, rev-parse, worktree list) plus the single \`git -C "${A.repo}" worktree add ...\` you are told to run. NEVER run git checkout, switch, branch, push, pull, reset, stash, commit, merge, rebase, or \`gh\`, \`az\`, \`glab\` or any other hosting-CLI PR commands against the main repository. Delivery and pull requests are the orchestrator's job.`
 const scribePrompt = (text) => `Your ONLY task: append the following text to the file ${A.transcript} using one \`cat >> "${A.transcript}" <<'TRANSCRIPT' ... TRANSCRIPT\` command from the Bash tool. Do not read the repository, do not run any git command, do not create branches, do not push, do not open pull requests, do not run tests. When the append is done, return the single word DONE.
 
 cat >> "${A.transcript}" <<'TRANSCRIPT'
