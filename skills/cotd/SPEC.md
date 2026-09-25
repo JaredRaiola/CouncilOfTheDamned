@@ -1,7 +1,5 @@
 # Council of the Damned — design spec
 
-Date: 2026-09-24
-Status: draft for review
 
 ## Purpose
 
@@ -235,7 +233,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
 - **Cleanup script owns worktrees (2026-09-25).** Every worktree create/link/remove/apply
   goes through `scripts/council-clean.sh`; members and reviewers never run
   `git worktree add`, `mklink` or `ln -s`, and SKILL.md never hand-assembles link paths
-  (the 2026-09-24 `"$W\$DEP"` path bug). The script STOPs (non-zero, a `STOP:` line)
+  (hand-assembled backslash paths have silently produced wrong paths). The script STOPs (non-zero, a `STOP:` line)
   before removing a worktree whose link survived (including when `clean` was called with
   `none` but a junction into the main checkout is still there: `worktree remove --force`
   follows junctions), and after cleanup if the main checkout's dependency dir is missing
@@ -278,18 +276,3 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
 - Live agent-to-agent messaging (rounds are the substitute).
 - Auto-commit or PR creation (existing dev-workflow does that after delivery).
 - Tournament brackets.
-
-## Smoke runs (2026-09-24)
-
-Throwaway repos, roster 2×sonnet, floor 2. Transcripts under `~/.claude/council/council-smoke*/`.
-
-| Run | Result | What it changed |
-|-----|--------|-----------------|
-| design #1 (`add-subtract-function.md`, archived as `-run1-buggy`) | verdict reached, but members never entered the target repo and a reviewer's `of: "Submission A"` skipped A's rebuttal | agents now `cd` into `args.repo` / create their own `council-wt-<slug>-<label>` worktree; review `of` and verdict labels are schema enums |
-| design #2 (`add-subtract-function-2.md`) | clean: both read the repo, both rebutted, winner B | none |
-| build (`add-subtract-build.md`) | first pass killed both as "under floor" for self-enumerated thin workflows; resumed after fix, winner A, 7/7 green, worktrees removed | dead-on-arrival is now total proven examples < minimum; per-workflow thinness is judge-only via `underFloor`; `winner` required + enum |
-| test (`cover-subtract-tests.md`) | mutation check worked for both; B killed for one-example-per-workflow | same floor change; `eliminated` deduped |
-| test + depDir (`council-smoke2/cover-label.md`) | review round with 2 survivors ran; junction created in both worktrees; winner A. **Cleanup deleted the main repo's `node_modules` through the junction.** | unlink the link (`rmdir` / `rm`) before every `git worktree remove`; verify the dependency dir afterwards or STOP. Reproduced and the safe sequence proven by hand. |
-| self-review (council-of-the-damned/self-review.md) | 5-member mixed roster design run on the skill itself; winner B; 16 agents ≈1.6M tokens | grafts A–M above applied |
-
-Not yet run live: the fixed cleanup path end-to-end via SKILL.md §5 (proven by hand only), rebuttal-with-fix in build mode, and a mixed-model roster.
