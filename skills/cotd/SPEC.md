@@ -1,6 +1,5 @@
 # Council of the Damned — design spec
 
-
 ## Purpose
 
 A skill that convenes several independent agents (mixed models) to attack one task
@@ -203,7 +202,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
 
 - Workflow scripts cannot use `Date.now()`; the orchestrator passes the date and slug
   in `args`.
-- **Junction hazard (found live).** Worktree builders link the main checkout's
+- **Junction hazard.** Worktree builders link the main checkout's
   dependency dir (`node_modules`, `.venv`, etc.) as a junction/symlink rather than
   reinstalling; the brief names the dir for that repo. `git worktree remove --force`
   on a worktree that still holds that link FOLLOWS it and deletes the main checkout's
@@ -212,7 +211,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
   dependency link FIRST (`rmdir`/plain `rm`, never `-r`/`-rf`, which also follows the
   link), only THEN `git worktree remove --force`, then verify the main checkout's dep
   dir is still intact before proceeding.
-- **Windows links (found in self-review).** `mklink /J` with a forward slash anywhere in
+- **Windows links.** `mklink /J` with a forward slash anywhere in
   either path fails (`Invalid switch`), so no junction is ever made; `council-clean.sh`
   builds both paths with `cygpath -w`. Git Bash `ln -s` on Windows copies instead of
   linking, so the script uses `mklink /J` on MINGW/MSYS/CYGWIN and `ln -s` elsewhere.
@@ -226,11 +225,11 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
 - **Blind judge.** Model names never reach the judge prompt; `noMeta()` strips `model`,
   `effort` and the fallback marker from everything quoted to another agent, and the
   orchestrator writes `Models:` into the transcript after the script returns.
-- **Scribe removed (2026-09-25).** The haiku scribe agents that appended the verdict note
+- **Scribe removed.** The haiku scribe agents that appended the verdict note
   and `Models:` line are gone: an agent asked to append one line once ran `git checkout -b`,
   pushed and opened a PR. The orchestrator writes the `## Result` block itself (SKILL.md §5
   step 0), on every verdict including judge-died.
-- **Cleanup script owns worktrees (2026-09-25).** Every worktree create/link/remove/apply
+- **Cleanup script owns worktrees.** Every worktree create/link/remove/apply
   goes through `scripts/council-clean.sh`; members and reviewers never run
   `git worktree add`, `mklink` or `ln -s`, and SKILL.md never hand-assembles link paths
   (hand-assembled backslash paths have silently produced wrong paths). The script STOPs (non-zero, a `STOP:` line)
@@ -244,7 +243,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
   `foo` never touches `council-wt-foo-2-A` from a kept flawed re-run. Scratch worktrees are
   `council-wt-<slug>-<label>-scratch`, one per reviewer, pre-created in §4; §4 pre-flight
   refuses to launch over an existing `council-wt-<slug>-*`.
-- **Harness relay (2026-09-25).** The Workflow harness prepends a `[Workflow harness -
+- **Harness relay.** The Workflow harness prepends a `[Workflow harness -
   user request]` block quoting the session's latest user message to every agent prompt
   and calls it the only user voice. If the user sent "continue" or an unrelated message
   right after the council call, every member received THAT as the user request. The
@@ -254,7 +253,7 @@ Review, rebuttal, and verdict schemas mirror the round descriptions above.
 - **Floor.** Dead on arrival is total proven examples only; `minWorkflows` (default 3)
   and `briefWorkflowCount` are judge guidance. An automatic workflow-count kill punished
   honest members who justified excluding brief-listed workflows.
-- **Agents acting on the main repo (found live).** The haiku `scribe:models` agent, asked
+- **Agents acting on the main repo.** The haiku `scribe:models` agent, asked
   only to append one line, ran `git checkout -b` in the MAIN repo, `git push -u` and
   `gh pr create` (scribes are now deleted, see above). `isolationRule` and the judge prompt
   allow only read-only git in the main repo; never
