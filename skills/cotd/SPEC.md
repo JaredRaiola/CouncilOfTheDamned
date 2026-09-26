@@ -14,7 +14,7 @@ convene; roster size is the cost knob once it does.
 
 | Mode | Candidate produces | Peers verify by |
 |------|--------------------|-----------------|
-| design | Approach write-up: files touched, risks, deliberate skips, diff sketch, workflows that a build would need to prove | Rebuttal rounds only |
+| design | An implementation plan an engineer with zero repo context could execute: tasks, each with files as `path:start-end action`, one-action steps carrying the actual code, the command and its expected output, and the brief workflows it proves; plus approach, risks, deliberate skips, workflows to prove. No placeholders. | Checking line ranges, symbols and step code against the repo, then rebuttal rounds |
 | build | Real diff in its own worktree + its own test/run output meeting the evidence floor | Running the candidate's tests in its worktree and trying to break it |
 | test | Spec file(s) for the target, proven RED then GREEN where applicable | Running every suite against the target and against a deliberately broken copy; a suite that stays green on the broken copy is dead |
 | review / audit | Findings with failure scenarios + a manual test plan, for a change (review) or a scope named in the brief's Task (audit, `pr: false`) | Cross-checking every peer finding against the code |
@@ -53,12 +53,13 @@ becomes the first section of the transcript.
 
 ### 1. Fan-out
 
-Roster: list of `{model, effort}`; default `fable×2, opus×2, sonnet×1`. Overridable
-inline ("council with 3 opus and 1 sonnet", "small council" = 3). Each candidate:
+Roster: list of `{model, effort}`; default `fable×2, opus×2`. Overridable
+inline ("council with 3 opus and 1 fable", "small council" = 2). Each candidate:
 
 - runs as a plain Workflow `agent()` call with no `isolation` opt. Build/test members get a
   `council-wt-<slug>-<label>` worktree that the orchestrator created before the Workflow
-  call with `scripts/council-clean.sh create` (detached at `args.base`, the orchestrator's
+  call with one `scripts/council-clean.sh create` call for every label (`A,B,C,...`, plus
+  `<L>-scratch` in test mode; a STOP mid-list is followed by `clean`) (detached at `args.base`, the orchestrator's
   `git rev-parse HEAD`, dependency dir linked); they `cd` into it as their first instructed
   step and stop if it is missing. Members never run `git worktree add`, `mklink` or `ln -s`.
   The script, not the member, records `worktree`/`base`. Members commit with message
@@ -67,8 +68,8 @@ inline ("council with 3 opus and 1 sonnet", "small council" = 3). Each candidate
   worktree and `checkout --force --detach` each candidate's HEAD in it for the mutation check
   (`--force` so an untracked file left by the previous candidate's suite cannot abort the checkout).
 - a fable seat that fails (credits, availability) is retried once on opus by the script's
-  `seat()` wrapper; `verdict.models` records the model that answered. Review and rebuttal
-  rounds run at the seat's own effort.
+  `seat()` wrapper; `verdict.models` records the model that answered. Review, rebuttal and
+  cross-check calls run at the seat's own effort unless `reviewEffort` is set.
 - receives the brief, an instruction to enter the repo/worktree first, and the
   isolation line: "you are ONE of several independent council members; work only from
   the brief and the repository you are told to enter; do NOT look for other members'
@@ -87,16 +88,46 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
    of N(N−1). It returns, per submission: confirmed bugs with repro, weaknesses, and one
    thing it does better than mine. Every round's prompt carries the brief. In build/test mode the reviewer runs the submission's
    tests in that submission's worktree. Reviewers may also challenge a candidate's
-   "workflow not affected" claims.
-2. **Rebuttal.** Each member sees the reviews of its own submission and answers each
-   point: concede, refute (must cite a file or a test run), or fix (build/test mode:
-   commits the fix in its worktree and re-runs). Rebuttal-with-fix is configurable,
-   default on.
-3. **Verdict.** One judge (fable, max effort) reads all rounds and:
+   "workflow not affected" claims. A reviewer sees its peers' submissions with every
+   `proof`/`observed` capped at 400 characters (`trim`: enough to rate `proofQuality`, not the
+   pasted logs) and its own submission as the `judgeView` stub (names and counts; it has the
+   worktree). In review/audit mode the cross-check round is pipelined the same way as
+   rebuttal below: `check:i` launches as soon as its own review and its ring peers' reviews
+   have returned (the next two live reviews in roster order, so a dead seat is skipped for the
+   one after it), and the budget is checked per
+   check call.
+2. **Rebuttal.** Each member sees the blocker/major bugs, workflow challenges and any
+   `proofQuality` rating other than `output` its reviewers raised and answers each: concede,
+   refute (must cite a file or a test run), or fix (build/test mode: one commit touching only
+   the cited bugs, one testCommand re-run). Every bug carries an id `<reviewer label><n>`
+   (n = its 1-based position among that review's bugs after the minor filter; in a
+   minors-only rebuttal every bug is numbered) that the rebuttal names in `bug`, so the judge
+   can see by id which blocker/major went unanswered; a challenge-only review has no bugs and
+   no ids (the rebuttal quotes the item instead). The member's own submission arrives as the
+   `judgeView` stub (no proofs; a proof rating is answered by re-running the testCommand in the
+   worktree). Minors are stripped from those rebuttals (they never eliminate). A build/test
+   member that drew nothing worse than minors gets them as a minors-only rebuttal when
+   `rebuttalFix` is on ("fix the cheap ones, concede the rest"), so the winner does not ship
+   known bugs. Design skips minors outright; decide rebuts every challenge, because any
+   challenged score the author neither refutes nor concedes counts for nothing. A member with
+   nothing to answer makes no rebuttal call. There is no barrier between Review and Rebuttal:
+   member X's rebuttal launches as soon as the ring seats that review X have returned
+   (`reviewersOf(label)` over per-reviewer promises), so a slow reviewer only delays the
+   members it reviewed. Rebuttal-with-fix is configurable, default on.
+3. **Verdict.** One judge (fable, high effort by default) decides on the record — the
+   reviews, rebuttals, test tails and each submission's example inputs (`judgeView`: no
+   `proof`/`observed` strings, which are the bulk of a submission; reviewers are the only
+   check on proof quality and must set a required `proofQuality` of `output`, `described` or
+   `mixed` per submission, which the judge reads in the reviews) — reading a diff only to
+   settle a disputed or unrebutted blocker/major, never re-running tests, and reading the
+   presumptive winner's diff exactly once before naming it (a contradiction with the record
+   is a disputed major). Design and decide judges decide on the record the same way, opening
+   the repo only for a disputed or unrebutted flaw/challenge and design's rule-7 check. It:
    - eliminates any submission with an unrefuted confirmed bug
    - eliminates any submission under the evidence floor (dead on arrival, checked before
      round 1 as well)
-   - ranks survivors, names a winner
+   - ranks survivors (correctness, then workflow coverage, then simplicity; examples beyond
+     the floor per workflow do not raise a rank), names a winner
    - lists grafts: specific fixes or tests to take from eliminated submissions
    - or returns `flawed: true` with reasons and stops
    The judge never sees model names (stripped from its prompt); the orchestrator, not an
@@ -113,7 +144,11 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
   the main tree (STOP on a failed check) — plus grafts, uncommitted.
 - test: same as build — the winner's whole diff (specs plus any testid/source edits) plus
   grafts.
-- design: write the winning approach into the transcript and offer "build the winner".
+- design: the winner's stub returns its `plan` (with `approach`, `filesTouched`); SKILL.md §5
+  prints the task list and offers "build the winner", which appends the plan verbatim to the
+  build brief as `## Plan (from design stage)`. Build/test members that see that heading execute
+  the plan task by task (`planRule`), record deviations as `Ruling:` entries in `risks`, and
+  reviewers check each submission against the plan before trying to break it.
 - flawed: main tree untouched; every worktree (build/test) is kept — nothing is removed,
   ever, on a flawed verdict — and SKILL.md prints their paths to the user for inspection
   (not written to the transcript).
@@ -135,7 +170,10 @@ Three rounds, each appended to `~/.claude/council/<repo-name>/YYYY-MM-DD-<slug>.
 - Candidates enumerate affected workflows first; each unaffected-looking workflow they
   exclude needs a one-line justification.
 - **minExamplesPerWorkflow: 5** distinct proven cases per workflow (varied inputs, edge
-  values, error paths). Proven = command run and output pasted, not described.
+  values, error paths). Proven = either a test case in the member's testCommand run, with
+  `proof` = that case's result line from the FINAL run, or a driven run whose output is
+  pasted; never one run per example, and never described. Once every affected workflow has
+  the floor, members stop: more earns nothing (pencils down).
 - **minWorkflows: 3** is guidance for the member prompt and the judge, not an automatic
   kill. The judge also gets `briefWorkflowCount` (counted by the orchestrator) and each
   member's affected count; marking a brief-listed workflow unaffected without a
@@ -156,7 +194,7 @@ Resolution order: bundled `council.config.json` next to SKILL.md → the project
 (`$CLAUDE_CONFIG_DIR` or `~/.claude`, edited with `/cotd config ...`) → `rosterByMode[<mode>]`
 → flags for one run (`--roster` beats `rosterByMode`). The project layer is committed and
 shared, so it is restricted to an allowlist: `roster`, `rosters`, `judge`, `rosterByMode`,
-`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix`, `reviewModel`. It can never set
+`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix`, `reviewModel`, `reviewEffort`. It can never set
 `transcriptDir`, `autoConvene`, `keepTranscripts` or `maxTokens` (where files go, whether the
 skill runs by itself, and what a run may spend stay the user's call); a disallowed key is
 reported and ignored, and an invalid file is reported and ignored whole. `/cotd config` marks
@@ -167,11 +205,11 @@ to `{ model, effort }` before the scripts see them.
 {
   "roster": "default",
   "rosters": {
-    "default": ["fable:high", "fable:high", "opus:high", "opus:high", "sonnet:high"],
-    "small":   ["fable:high", "opus:high", "sonnet:high"],
+    "default": ["fable:high", "fable:high", "opus:high", "opus:high"],
+    "small":   ["fable:high", "opus:high"],
     "cheap":   ["sonnet:high", "sonnet:high", "sonnet:high"]
   },
-  "judge": "fable:max",
+  "judge": "fable:high",
   "autoConvene": true,
   "justGo": false,
   "minExamplesPerWorkflow": 5,
@@ -183,7 +221,8 @@ to `{ model, effort }` before the scripts see them.
   "maxTokens": 0,
   "maxRetries": 0,
   "rosterByMode": {},
-  "reviewModel": ""
+  "reviewModel": "",
+  "reviewEffort": ""
 }
 ```
 
@@ -191,6 +230,23 @@ to `{ model, effort }` before the scripts see them.
 - `rosterByMode`: mode → preset name (e.g. `{ "review": "cheap" }`), validated like `roster`.
 - `reviewModel` (`--review-model`): model for every review, rebuttal and cross-check call
   (`A.reviewModel || me.model`); members and the judge keep their seats. Empty = off.
+- `reviewEffort` (`--review-effort`): effort for the same calls (`A.reviewEffort || me.effort`). Empty = off.
+- **Slim return.** Every script returns `{ verdict, transcript, ledger }` plus, for
+  build/test/design, `submissions` as one stub per member (`label`, `worktree`, `model`,
+  `summary`, `testCommand`; design: `label`, `model`, `summary`, and the winner's stub adds
+  `approach`, `filesTouched`, `plan` because §5/§6 append the plan to the next brief). Full
+  submissions, reviews and rebuttals were 70-190 KB per run and landed in the orchestrator's
+  context on every run; they live in the transcript only.
+- **Plans, not approaches.** Design members return `plan: [{ name, files: ["path:start-end action"],
+  steps: [{ do, code?, run?, expect? }], proves }]` in the shape of a writing-plans document
+  (one action per step, actual code and commands, no placeholders, self-reviewed for coverage).
+  Reviewers verify line ranges, symbols and step code against the repo; the judge ranks on
+  correctness, then coverage of the brief, then simplicity, and checks the winner's plan once
+  (rule 7). Build/test `planRule` fires on a `## Plan (from design stage)` heading in the brief:
+  execute task by task, deviations recorded as `Ruling:` in `risks`; reviewers check plan
+  compliance first. Every member, reviewer and rebuttal prompt also carries `workRule`: read
+  each file whole once, batch edits per task, one suite run per task, re-read only the moved
+  region after a failed Edit.
 
 ## Round two (1.4.0)
 
@@ -232,8 +288,10 @@ to `{ model, effort }` before the scripts see them.
   that repo and slug has no `won` fate for the label (no line, no note).
 - **Budget.** In every script `const t0 = budget.spent()` at the top; `over(stage)` is true
   when `maxTokens` is set and `budget.spent() - t0 >= maxTokens`. Checked after the fan-out and
-  after Review: it logs `budget: <spent>k >= <cap>k after <stage>; skipping to Verdict`, pushes
-  `budget exhausted after <stage>` onto `degraded` and skips the remaining rounds. The judge
+  again per member as its rebuttal (review mode: its cross-check) is about to launch; it latches,
+  logs `budget: <spent>k >= <cap>k after <stage>; skipping to Verdict` once, pushes
+  `budget exhausted after <stage>` onto `degraded` and launches nothing further, so within one
+  round early members may have a rebuttal and later ones none. The judge
   always runs. It is a phase cap on output tokens, not a hard limit: the round in flight and
   the judge can overshoot it.
 - **`--stop-after fanout`** (build/test/design): return right after the members with

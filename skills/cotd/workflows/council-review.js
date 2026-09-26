@@ -45,7 +45,7 @@ ${section}
 TRANSCRIPT
 Keep it under 80 lines. Do not edit any other part of that file.`
 
-const readOnly = `Work in the checkout at ${A.repo} (read-only: never edit files, never run git checkout/switch/reset/commit/push, never post to GitHub, Azure DevOps, or any issue tracker). You may run the typecheck or single test files there; do not run the full suite. Do not invoke the council-of-the-damned skill; you are already a member. Do not look for other members' output or the council transcript beyond what you are given. ${noPkgRule} ${relayRule}`
+const readOnly = `Work in the checkout at ${A.repo} (read-only: never edit files, never run git checkout/switch/reset/commit/push, never post to GitHub, Azure DevOps, or any issue tracker). You may run the typecheck or single test files there; do not run the full suite. Do not invoke the council-of-the-damned skill; you are already a member. Do not look for other members' output or the council transcript beyond what you are given. ${noPkgRule} ${relayRule} How to work: read every file you will cite in full with the Read tool ONCE, then write; never learn code from grep or sed slices. Re-reading a file you already read in full means you lost track: stop, re-plan, then continue.`
 
 const reviewPrompt = (i) => `First: cd "${A.repo}".
 
@@ -105,33 +105,38 @@ const ask = (prompt, o) => (agentCalls++, agent(prompt, o))
 const seat = (prompt, o) => ask(prompt, o).catch(() => null).then(r => r ?? (o.model === 'fable'
   ? (log(`${o.label}: fable failed, retrying on opus`), ask(prompt, { ...o, model: 'opus' }).then(x => x && { ...x, _fellBack: true }).catch(() => null))
   : r))
-// --budget: a phase cap in output tokens spent by this run, checked between rounds; the judge always runs
-const over = (stage) => A.maxTokens > 0 && budget.spent() - t0 >= A.maxTokens && (log(`budget: ${Math.round((budget.spent() - t0) / 1000)}k >= ${Math.round(A.maxTokens / 1000)}k after ${stage}; skipping to Verdict`), degraded.push(`budget exhausted after ${stage}`), true)
+// --budget: a phase cap in output tokens spent by this run, checked between rounds; the judge always runs. Latches: once over, stays over without logging again.
+let overLatched = false
+const over = (stage) => overLatched || (overLatched = A.maxTokens > 0 && budget.spent() - t0 >= A.maxTokens && (log(`budget: ${Math.round((budget.spent() - t0) / 1000)}k >= ${Math.round(A.maxTokens / 1000)}k after ${stage}; skipping to Verdict`), degraded.push(`budget exhausted after ${stage}`), true))
 // run ledger line, spread into every return; §5 appends it to <config dir>/council-ledger.jsonl. Never quoted into a prompt.
 // review/audit have no member winner: a member that returned is 'unranked'
 const ledger = (v) => ({ ledger: JSON.stringify({ date: A.date, repoName: A.repoName, slug: A.slug, mode: A.pr ? 'review' : 'audit', runId: `${A.repoName}/${A.date}-${A.slug}`, agentCalls, tokens: budget.spent() - t0, flawed: !!v.flawed, seats: roster.map((m, i) => { const r = reviews.find(x => x.label === LABELS[i]); return { seat: `${r ? r.model : m.model}:${m.effort}`, label: LABELS[i], fate: r ? 'unranked' : 'died' } }) }) })
 phase('Review')
-const rv = await parallel(roster.map((m, i) => () =>
+const reviewP = roster.map((m, i) =>
   seat(reviewPrompt(i), { label: `review:${LABELS[i]}`, phase: 'Review', model: m.model, effort: m.effort, schema: REVIEW })
     .then(r => r && { ...noMeta(r), label: LABELS[i], model: r._fellBack ? 'opus' : m.model, effort: m.effort })
-))
+)
+// no barrier between Review and Cross-check: check:i launches as soon as its own review and its ring peers' reviews
+// have returned, so a slow reviewer only delays the seats it feeds. The ring is the next two LIVE reviews in roster
+// order (a dead seat is skipped for the one after it), which is peersOf over the survivors without waiting for them all.
+phase('Cross-check')
+const checkP = roster.map((m, i) => reviewP[i].then(async (me) => {
+  if (!me) return null
+  const others = []
+  for (let j = 1; j < roster.length && others.length < 2; j++) { const r = await reviewP[(i + j) % roster.length]; if (r) others.push(r) }
+  if (!others.length || over('Review')) return null
+  return seat(checkPrompt(me, others), { label: `check:${me.label}`, phase: 'Cross-check', model: A.reviewModel || me.model, effort: A.reviewEffort || me.effort, schema: CHECK })
+    .then(c => c ? { by: me.label, ...noMeta(c) } : (degraded.push(`cross-checker ${me.label} died`), null))
+}))
+const rv = await Promise.all(reviewP)
 rv.forEach((r, i) => { if (!r) degraded.push(`member ${LABELS[i]} died during review`) })
 const reviews = rv.filter(Boolean)
 if (!reviews.length) {
   const verdict = { findings: [], dropped: [], testPlan: [], lessons: [], degraded: [...degraded, 'every member died'] }
-  return { reviews, checks: [], verdict, transcript: A.transcript, ...ledger(verdict) }
+  return { verdict, transcript: A.transcript, ...ledger(verdict) }
 }
-
-let checks = []
-if (reviews.length > 1 && !over('Review')) {
-  phase('Cross-check')
-  const ck = await parallel(reviews.map((me, i) => () =>
-    seat(checkPrompt(me, peersOf(reviews, i)), { label: `check:${me.label}`, phase: 'Cross-check', model: A.reviewModel || me.model, effort: me.effort, schema: CHECK })
-      .then(c => c && { by: me.label, ...noMeta(c) })
-  ))
-  ck.forEach((c, i) => { if (!c) degraded.push(`cross-checker ${reviews[i].label} died`) })
-  checks = ck.filter(Boolean)
-} else if (reviews.length === 1) log('single reviewer: skipping cross-check')
+if (reviews.length === 1) log('single reviewer: skipping cross-check')
+const checks = (await Promise.all(checkP)).filter(Boolean)
 
 phase('Verdict')
 const judged = await seat(judgePrompt(reviews.map(noMeta), checks), { label: 'judge', phase: 'Verdict', model: A.judge.model, effort: A.judge.effort, schema: VERDICT })
@@ -139,4 +144,4 @@ const verdict = judged ? noMeta(judged) : (degraded.push('judge died'), { findin
 verdict.lessons = (verdict.lessons || []).map(l => String(l).replace(/\s*[\r\n]+\s*/g, ' ').trim()).filter(Boolean)
 verdict.models = Object.fromEntries(reviews.map(r => [r.label, r.model]))
 if (degraded.length) verdict.degraded = degraded
-return { reviews, checks, verdict, transcript: A.transcript, ...ledger(verdict) }
+return { verdict, transcript: A.transcript, ...ledger(verdict) }

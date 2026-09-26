@@ -58,6 +58,35 @@ pass "prefix slug fo: foo-A intact, fo-A removed, refs/council/fo/A saved"
 expect_stop "create with a path label" "$S" create "$repo" $slug none '../evil' "$base"
 [ ! -e "$(dirname "$tmp")/evil" ] && [ ! -e "$tmp/evil" ] || fail "path label escaped"
 
+# multi-label create (one call for every seat) and its STOP-mid-list path, on its own slug
+expect_ok "multi-label create A,B,A-scratch (slug ml)" "$S" create "$repo" ml "$dep" A,B,A-scratch "$base"
+[ "$(printf '%s\n' "$out" | grep -c '^created ')" = 3 ] || fail "expected 3 created lines: $out"
+for L in A B A-scratch; do [ -d "$tmp/council-wt-ml-$L" ] && [ -e "$tmp/council-wt-ml-$L/$dep/real.txt" ] && [ "$(git -C "$tmp/council-wt-ml-$L" rev-parse HEAD)" = "$base" ] || fail "ml $L worktree, link or base wrong"; done
+expect_stop "multi-label create C,B,D STOPs at B (exists)" "$S" create "$repo" ml "$dep" C,B,D "$base"
+[ -d "$tmp/council-wt-ml-C" ] && [ ! -e "$tmp/council-wt-ml-D" ] || fail "mid-list STOP: C should exist (made before the STOP), D must not"
+printf '%s\n' "$out" | grep -q '^created .*council-wt-ml-C$' || fail "C's created line missing before the STOP: $out"
+expect_stop "multi-label create E,A-1 STOPs at the bad label" "$S" create "$repo" ml "$dep" E,A-1 "$base"
+[ -d "$tmp/council-wt-ml-E" ] && [ ! -e "$tmp/council-wt-ml-A-1" ] || fail "bad-label mid-list: E should exist, A-1 must not"
+expect_stop "multi-label create with a glob in the list" "$S" create "$repo" ml "$dep" 'F,*' "$base"
+[ ! -e "$tmp/council-wt-ml-F" ] || fail "glob list created F"
+expect_stop "multi-label create with a space in the list" "$S" create "$repo" ml "$dep" 'F G' "$base"
+[ ! -e "$tmp/council-wt-ml-F" ] && [ ! -e "$tmp/council-wt-ml-G" ] || fail "space list created a worktree"
+expect_stop "multi-label create with an empty field in the list" "$S" create "$repo" ml "$dep" 'F,,G' "$base"
+[ ! -e "$tmp/council-wt-ml-F" ] && [ ! -e "$tmp/council-wt-ml-G" ] || fail "empty-field list created a worktree"
+expect_stop "multi-label create with a bad base makes nothing" "$S" create "$repo" ml "$dep" F,G deadbeef
+[ ! -e "$tmp/council-wt-ml-F" ] || fail "bad-base multi create left F"
+expect_ok "clean ml undoes the partial creates (SKILL.md's || clean)" "$S" clean "$repo" ml "$dep"
+printf '%s\n' "$out" | grep -q "cleaned 5 worktree" || fail "expected 5 ml worktrees cleaned (A B A-scratch C E): $out"
+for L in A B A-scratch C E; do [ ! -e "$tmp/council-wt-ml-$L" ] || fail "ml $L survived clean"; done
+[ -d "$wtA" ] && [ -f "$repo/$dep/real.txt" ] || fail "clean ml touched foo or deps"
+pass "multi-label: 3 created in one call, STOP mid-list kept the earlier ones for clean, bad list rejected before any create, foo untouched"
+grep -qF 'create "<git root>" <slug> <depDir|none> A,B,C,D,E <base> || { bash "<skill root>/scripts/council-clean.sh" clean "<git root>" <slug> <depDir|none>; exit 1; }' "$here/../SKILL.md" || fail "SKILL.md §4 lacks the one-call create || clean line"
+pass "SKILL.md §4: one create call for all seats with clean-on-STOP"
+# the SKILL.md one-liner itself: a STOP at the second label makes clean remove the first, rc=1, deps intact
+run bash -c '"$1" create "$2" ml "$3" C,A-1 "$4" || { "$1" clean "$2" ml "$3"; exit 1; }' _ "$S" "$repo" "$dep" "$base"
+[ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q '^STOP:' && printf '%s\n' "$out" | grep -q 'cleaned 1 worktree' && [ ! -e "$tmp/council-wt-ml-C" ] && [ -f "$repo/$dep/real.txt" ] || fail "SKILL.md create||clean one-liner: rc=$rc $out"
+pass "SKILL.md one-liner: create C,A-1 STOPs, clean removes C, rc=1, deps intact"
+
 # member A works: tracked edit + new file committed, plus an uncommitted untracked file (add -A must catch it)
 printf 'two\n' > "$wtA/a.txt"; printf 'new\n' > "$wtA/new.txt"
 git -C "$wtA" add -A && git -C "$wtA" commit -q -m council-A || fail "commit in A"

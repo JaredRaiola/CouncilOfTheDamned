@@ -84,9 +84,10 @@ Examples:
 | `--just-go` | "just go" | no questions, no approval step (`/cotd config justGo on` makes it the default) |
 | `--retries N` | "retry up to N times" | on a flawed verdict, re-run with the judge's reasons added to the brief, up to N times |
 | `--wip` | "on my working copy", "wip" | build/test on your uncommitted work: it is snapshotted to `refs/council-wip/<slug>` (HEAD, branch and index untouched) and the winner lands on top of your dirty tree |
-| `--budget <N>k` | "budget 600k" | phase cap in output tokens: once reached after a round, the remaining rounds are skipped (judge still runs) and the run is marked DEGRADED |
+| `--budget <N>k` | "budget 600k" | phase cap in output tokens: checked after the fan-out and as each rebuttal or cross-check is about to launch; once reached nothing further launches (judge still runs) and the run is marked DEGRADED |
 | `--stop-after fanout` | "stop after fanout" | build/test/design: stop after the members; nothing lands, worktrees stay; use `/cotd runs` and `/cotd apply` |
 | `--review-model <model>` | "review with sonnet" | run every review, rebuttal and cross-check on that model |
+| `--review-effort <effort>` | "review at medium" | run every review, rebuttal and cross-check at that effort |
 | `--options "A: ...; B: ..."` | "choose between ..." | decide: the fixed options (or a `## Options` section in your brief) |
 
 Models: whatever your session's Agent tool offers (`fable`, `opus`, `sonnet`, `haiku`).
@@ -103,7 +104,8 @@ Effort: `low`, `medium`, `high` (default), `max`. Max 10 seats.
 Each stage is `<mode>:<roster>`: the mode is `design`, `build` or `test`; the roster is a
 preset name, an explicit seat list, or `solo`. `solo` means no council for that stage:
 Claude does it as ordinary work, no agents, no judge. Stages chain automatically. The
-design winner becomes the build brief's approach, the build winner is applied uncommitted,
+design winner's plan (tasks with files, line ranges, code and commands) becomes the build
+brief's `## Plan (from design stage)`, which builders execute task by task, the build winner is applied uncommitted,
 and the test stage runs on that uncommitted tree via `--wip`. The brief is approved once,
 up front, with a cost preview for the whole pipeline. A flawed or degraded stage stops the
 pipeline; what earlier stages landed stays in your tree, uncommitted. One transcript per
@@ -157,7 +159,7 @@ hand freely) and added to every later brief of that repo as a separate
 
 Defaults ship in the plugin. A repo can commit `<repo>/.cotd/council.config.json` (the
 project layer), limited to `roster`, `rosters`, `judge`, `rosterByMode`,
-`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix` and `reviewModel`; any other key in
+`minExamplesPerWorkflow`, `minWorkflows`, `rebuttalFix`, `reviewModel` and `reviewEffort`; any other key in
 it is reported and ignored. Your overrides live in `~/.claude/council.config.json`
 (or `$CLAUDE_CONFIG_DIR/council.config.json`), beat the project layer, and survive plugin
 updates. Order: shipped → project → yours → `rosterByMode` → flags. Edit your file by hand or
@@ -177,6 +179,7 @@ with:
 | `/cotd config rosterByMode review cheap` | always use preset `cheap` for reviews (`--roster` still wins) |
 | `/cotd config maxTokens 600k` | default budget; `0` turns it off |
 | `/cotd config reviewModel sonnet` | run reviews, rebuttals and cross-checks on sonnet; `none` = each member's own seat |
+| `/cotd config reviewEffort medium` | run reviews, rebuttals and cross-checks at medium effort; `none` = each member's own effort |
 | `/cotd config keepWorktrees on` | any other key the same way |
 | `/cotd config reset` | back to shipped defaults |
 
@@ -186,11 +189,11 @@ Shipped defaults:
 {
   "roster": "default",
   "rosters": {
-    "default": ["fable:high", "fable:high", "opus:high", "opus:high", "sonnet:high"],
-    "small":   ["fable:high", "opus:high", "sonnet:high"],
+    "default": ["fable:high", "fable:high", "opus:high", "opus:high"],
+    "small":   ["fable:high", "opus:high"],
     "cheap":   ["sonnet:high", "sonnet:high", "sonnet:high"]
   },
-  "judge": "fable:max",
+  "judge": "fable:high",
   "autoConvene": true,
   "justGo": false,
   "minExamplesPerWorkflow": 5,
@@ -202,7 +205,8 @@ Shipped defaults:
   "maxTokens": 0,
   "maxRetries": 0,
   "rosterByMode": {},
-  "reviewModel": ""
+  "reviewModel": "",
+  "reviewEffort": ""
 }
 ```
 
@@ -223,6 +227,7 @@ Shipped defaults:
 | `maxRetries` | `0`: a flawed verdict stops. `N`: retry up to N times with the judge's reasons appended to the brief; degraded runs never auto-retry |
 | `rosterByMode` | mode → preset name, e.g. `{ "review": "cheap", "decide": "small" }` |
 | `reviewModel` | model for every review, rebuttal and cross-check call (`--review-model`); empty = each member's own seat |
+| `reviewEffort` | effort for every review, rebuttal and cross-check call (`--review-effort`); empty = each member's own effort |
 
 If `fable` is not available in your session, its seats run on `opus`; a fable seat that
 fails mid-run is retried on `opus` and the transcript's `Models:` line names the model that
@@ -290,12 +295,21 @@ report is printed.
 
 ## Cost
 
-Roster size is the cost knob. A run is about 3N+2 agent calls for N members (build,
+Roster size is the cost knob. A run is up to 3N+2 agent calls for N members (build,
 review, rebuttal, judge); with more than 3 members each one reviews two peers instead of
-all of them. A 5-seat build run can exceed a million tokens. `--roster small` or
-`--roster cheap` for routine work, `--review-model sonnet` to make the review rounds
-cheaper, `--budget 600k` to cut the rounds short once that many output tokens are spent, and
-`/cotd stats` to see which seats actually win.
+all of them, a rebuttal answers only blocker/major bugs (a member that drew none fixes its
+minors instead), and a member's rebuttal starts as soon as its own reviewers return rather
+than after the whole review round (review mode pipelines its cross-checks the same way).
+Members prove their examples from one final test run, not one run per example, and stop
+once every workflow has its floor. Reviewers see peers' proofs capped at 400 characters and
+their own submission as a stub; rebuttal agents get their own stub and answer bugs by id.
+The judge (design and decide included) decides on the record (reviews, rebuttals, test
+tails, example inputs, the reviewers' proof-quality ratings), reads a diff only to settle a
+disputed bug, and reads the winner's diff once before naming it. A 4-seat build run can still
+exceed a million tokens. `--roster small` or
+`--roster cheap` for routine work, `--review-model sonnet` or `--review-effort medium` to make
+the review rounds cheaper, `--budget 600k` to cut the rounds short once that many output
+tokens are spent, and `/cotd stats` to see which seats actually win.
 
 ## Safety notes
 

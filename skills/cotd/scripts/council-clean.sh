@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Council of the Damned worktree lifecycle. Runs under Git Bash on Windows and on Linux/macOS.
 #
-#   council-clean.sh create <repo> <slug> <depDir|none> <label> <base>
-#       git worktree add --detach <base> at <repo>/../council-wt-<slug>-<label>
+#   council-clean.sh create <repo> <slug> <depDir|none> <label[,label...]> <base>
+#       For each label: git worktree add --detach <base> at <repo>/../council-wt-<slug>-<label>
 #       (label "review" → <repo>/../council-review-<slug>), then link <depDir> from the main checkout
-#       (junction via mklink /J on Windows, ln -s elsewhere) and verify it. Prints the worktree path.
+#       (junction via mklink /J on Windows, ln -s elsewhere) and verify it. Prints one "created <path>"
+#       line per label; a STOP mid-list leaves the worktrees already made for `clean` to undo.
 #   council-clean.sh clean  <repo> <slug> <depDir|none>
 #       For every worktree of THIS slug only (council-wt-<slug>-<L>, council-wt-<slug>-<L>-scratch,
 #       council-review-<slug>; never council-wt-<slug>-2-<L>): save refs/council/<slug>/<label> (a snapshot
@@ -161,18 +162,22 @@ unlink_dep() {  # $1 = worktree; removes only the link, never its contents
 
 case "$verb" in
 create)
-  label=${5:-}; base=${6:-}
-  [ -n "$label" ] && [ -n "$base" ] || stop "create needs <label> <base>"
-  safe label "$label"
-  # only labels that clean's globs can match, so nothing is ever orphaned
-  case "$label" in [A-J]|[A-J]-scratch|review) ;; *) stop "label must be A-J, <A-J>-scratch or review: $label";; esac
-  wt=$(wt_of "$label")
-  [ -e "$wt" ] && stop "worktree path already exists: $wt"
+  labels=${5:-}; base=${6:-}
+  [ -n "$labels" ] && [ -n "$base" ] || stop "create needs <label[,label...]> <base>"
+  # the list is word-split below, so no glob or whitespace characters may reach it
+  case "$labels" in *[!A-Za-z0-9,._-]*|,*|*,|*,,*) stop "labels must match [A-Za-z0-9._-], comma-separated, no empty field: $labels" ;; esac
   [ -z "$dep" ] || [ -d "$repo/$dep" ] || stop "dependency dir missing in main checkout: $repo/$dep"
   git -C "$repo" rev-parse --verify -q "$base^{commit}" >/dev/null || stop "base $base is not a commit"
-  out=$(git -C "$repo" worktree add --detach "$wt" "$base" 2>&1) || stop "git worktree add failed for $wt at $base: $out"
-  link_dep "$wt"
-  echo "created $wt"
+  for label in ${labels//,/ }; do
+    safe label "$label"
+    # only labels that clean's globs can match, so nothing is ever orphaned
+    case "$label" in [A-J]|[A-J]-scratch|review) ;; *) stop "label must be A-J, <A-J>-scratch or review: $label";; esac
+    wt=$(wt_of "$label")
+    [ -e "$wt" ] && stop "worktree path already exists: $wt"
+    out=$(git -C "$repo" worktree add --detach "$wt" "$base" 2>&1) || stop "git worktree add failed for $wt at $base: $out"
+    link_dep "$wt"
+    echo "created $wt"
+  done
   ;;
 clean)
   removed=0

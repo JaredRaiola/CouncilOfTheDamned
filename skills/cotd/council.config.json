@@ -1,11 +1,11 @@
 {
   "roster": "default",
   "rosters": {
-    "default": ["fable:high", "fable:high", "opus:high", "opus:high", "sonnet:high"],
-    "small":   ["fable:high", "opus:high", "sonnet:high"],
+    "default": ["fable:high", "fable:high", "opus:high", "opus:high"],
+    "small":   ["fable:high", "opus:high"],
     "cheap":   ["sonnet:high", "sonnet:high", "sonnet:high"]
   },
-  "judge": "fable:max",
+  "judge": "fable:high",
   "autoConvene": true,
   "justGo": false,
   "minExamplesPerWorkflow": 5,
@@ -17,5 +17,6 @@
   "maxTokens": 0,
   "maxRetries": 0,
   "rosterByMode": {},
-  "reviewModel": ""
+  "reviewModel": "",
+  "reviewEffort": ""
 }
